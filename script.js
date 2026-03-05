@@ -505,7 +505,7 @@ async function startReadingQuiz(){
 - answer 必須等於 options 其中之一（不可用 A/B/C/D）
 
 單字清單：
-${words.join(", ")}
+${pickWordListForAI(60).join(", ")}
 
 文法清單：
 ${grammarList}`, '國七程度。');
@@ -585,7 +585,7 @@ async function startClozeQuiz(){
 - 空格考點分散：介系詞/時態/連接詞/代名詞/可數不可數等
 
 單字清單：
-${words.join(", ")}
+${pickWordListForAI(60).join(", ")}
 
 文法清單：
 ${grammarList}`, '國七程度。');
@@ -703,6 +703,7 @@ async function testAIConnection(){
     badge(true,'AI：已連線');
   }catch(e){
     badge(false,'AI：尚未連線');
+  testAIConnection();
   testAIConnection();
   }
 }
