@@ -1,5 +1,18 @@
 // script.js — v9 settings版（穩定）
 (() => {
+
+// Polyfill: String.prototype.replaceAll for older browsers (some mobile/older Edge)
+if (!String.prototype.replaceAll) {
+  // eslint-disable-next-line no-extend-native
+  String.prototype.replaceAll = function(search, replacement) {
+    const target = String(this);
+    if (search instanceof RegExp) {
+      return target.replace(search, replacement);
+    }
+    return target.split(search).join(replacement);
+  };
+}
+
 'use strict';
 const $=q=>document.querySelector(q); const $$=q=>Array.from(document.querySelectorAll(q));
 
@@ -304,9 +317,11 @@ async function callGemini(model,system,user){
           }
           const text = (jr?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('');
           try{
+            badge(true,'AI：已連線');
             return JSON.parse(text);
           }catch(e){
             const c=text.replace(/^```json\s*/i,'').replace(/```\s*$/i,'').trim();
+            badge(true,'AI：已連線');
             return JSON.parse(c);
           }
         }else{
