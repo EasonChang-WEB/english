@@ -1,18 +1,5 @@
 // script.js — v9 settings版（穩定）
 (() => {
-
-// Polyfill: String.prototype.replaceAll for older browsers (some mobile/older Edge)
-if (!String.prototype.replaceAll) {
-  // eslint-disable-next-line no-extend-native
-  String.prototype.replaceAll = function(search, replacement) {
-    const target = String(this);
-    if (search instanceof RegExp) {
-      return target.replace(search, replacement);
-    }
-    return target.split(search).join(replacement);
-  };
-}
-
 'use strict';
 const $=q=>document.querySelector(q); const $$=q=>Array.from(document.querySelectorAll(q));
 
@@ -227,29 +214,10 @@ function renderGrammar(){
 }
 
 function renderStats(){
-  const now = Date.now();
-  const DAY = 86400*1000;
-  // prune older than 30 days
-  stats.sessions = (stats.sessions||[]).filter(x => (x.time||0) >= now - 30*DAY);
-  saveJson(STATS_KEY, stats);
-
-  let rangeDays = 7;
-  const sel = document.getElementById('statRange');
-  if(sel){
-    const v=(sel.value||'7').toString();
-    if(v.includes('今日')) rangeDays = 1;
-    else {
-      const n=parseInt(v,10);
-      if(!isNaN(n)) rangeDays = n;
-    }
-  }
-  const since = now - rangeDays*DAY;
-  const sessions = (stats.sessions||[]).filter(x => (x.time||0) >= since);
-
+  const sessions = stats.sessions || [];
   const totalCount = sessions.length;
   const avg = totalCount ? Math.round(sessions.reduce((a,b)=>a+(b.score||0),0)/totalCount) : 0;
   const wrong = totalCount ? sessions.reduce((a,b)=>a+(b.wrong||0),0) : 0;
-
   const elS=document.getElementById('statSessions'); if(elS) elS.textContent=String(totalCount);
   const elA=document.getElementById('statAvg'); if(elA) elA.textContent=String(avg);
   const elW=document.getElementById('statWrong'); if(elW) elW.textContent=String(wrong);
@@ -284,7 +252,7 @@ function isModelBad(msg){msg=(msg||'').toLowerCase();return msg.includes('no lon
 function modelCandidates(){const pref=Array.isArray(globalThis.GEMINI_MODEL_PREFERENCE)?globalThis.GEMINI_MODEL_PREFERENCE:[];const out=[];const seen=new Set();for(const m of pref){if(m&&!seen.has(m)){seen.add(m);out.push(m);}}return out;}
 async function callGemini(model,system,user){
 
-    // Prevent spam / double-click bursts that trigger 429
+    // Prevent double-click bursts
     if(window.__AI_IN_FLIGHT__){
       throw new Error('AI 忙碌中，請稍後再試');
     }
@@ -294,7 +262,6 @@ async function callGemini(model,system,user){
     const body = { model, system, user };
 
     try{
-      // Backoff retry for 429
       for(let attempt=0; attempt<=2; attempt++){
         const r = await fetch(url,{
           method:'POST',
@@ -309,56 +276,36 @@ async function callGemini(model,system,user){
         }
 
         const ct = (r.headers.get('content-type')||'').toLowerCase();
-
         if(ct.includes('application/json')){
           const jr = await r.json();
           if(!r.ok){
-            throw new Error(jr?.error || JSON.stringify(jr));
+            throw new Error(jr && jr.error ? jr.error : JSON.stringify(jr));
           }
-          const text = (jr?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('');
+          // Mark connected once we get a valid response
+          badge(true,'AI：已連線');
+
+          const parts = (((jr||{}).candidates||[])[0]||{}).content;
+          const texts = (parts && parts.parts) ? parts.parts : [];
+          let text = '';
+          for(const p of texts){ text += (p && p.text) ? p.text : ''; }
+
           try{
-            badge(true,'AI：已連線');
             return JSON.parse(text);
           }catch(e){
             const c=text.replace(/^```json\s*/i,'').replace(/```\s*$/i,'').trim();
-            badge(true,'AI：已連線');
             return JSON.parse(c);
           }
         }else{
           const t = await r.text();
-          if(!r.ok) throw new Error(`Proxy HTTP ${r.status}: ${t.slice(0,200)}`);
-          throw new Error('Proxy 回傳非 JSON，請確認 Replit main.py 是否為 proxy 版本');
+          throw new Error(`Proxy HTTP ${r.status}: ${t.slice(0,200)}`);
         }
       }
       throw new Error('AI 請求過於頻繁（429），請稍後再試');
     }finally{
       window.__AI_IN_FLIGHT__ = false;
     }
-  };
-
-    const r = await fetch(url,{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json'
-      },
-      body:JSON.stringify(body)
-    });
-
-    const jr = await r.json();
-
-    const text = (jr?.candidates?.[0]?.content?.parts||[])
-      .map(p=>p.text||'')
-      .join('');
-
-    try{
-      return JSON.parse(text);
-    }catch(e){
-      const c=text.replace(/^```json\s*/i,'').replace(/```\s*$/i,'').trim();
-      return JSON.parse(c);
-    }
   }
 async function gjson(system,user){
-    // Proxy mode: no API key in browser. Choose a model from preference list.
     const pref = Array.isArray(globalThis.GEMINI_MODEL_PREFERENCE) ? globalThis.GEMINI_MODEL_PREFERENCE : ["models/gemini-2.0-flash"];
     const model = pref[0] || "models/gemini-2.0-flash";
     return await callGemini(model, system, user);
@@ -487,42 +434,8 @@ function filterGrammarByScope(){
   return data.grammar.filter(g=>set.has(`${g.book||''} ${g.unit||''}`.trim()));
 }
 
-
-function pickWordListForAI(maxN){
-  const pool = filterVocabByScope();
-  const words = pool.map(v=>String(v.word||"").trim()).filter(Boolean);
-  const uniq = Array.from(new Set(words.map(w=>w.toLowerCase()))).map(w=>{
-    // keep original casing if exists
-    const hit = words.find(x=>x.toLowerCase()===w);
-    return hit || w;
-  });
-  return shuffle(uniq).slice(0, maxN);
-}
-function pickGrammarListForAI(maxN){
-  const pool = filterGrammarByScope();
-  const items = pool.map(g=>{
-    const title = String(g.title||"").trim();
-    const ex = Array.isArray(g.examples) ? g.examples.slice(0,2).join(" / ") : "";
-    const head = `${g.book||""} ${g.unit||""}`.trim();
-    return `${head}｜${title}${ex?`｜例：${ex}`:""}`.trim();
-  }).filter(Boolean);
-  const uniq = Array.from(new Set(items));
-  return uniq.slice(0, maxN);
-}
-
-
 function buildVocabQuiz(){
-  const poolAll=filterVocabByScope();
-  const diff = settings.difficulty || '標準';
-  const easyStop = new Set(['a','an','the','i','you','he','she','it','we','they','am','is','are','be','do','does','did','go','goes','went','in','on','at','to','for','and','but']);
-  const pool = (diff==='基礎') ? poolAll : poolAll.filter(v=>{
-    const w=(v.word||'').toLowerCase().trim();
-    if(!w) return false;
-    if(easyStop.has(w)) return false;
-    if((v.unit||'').toLowerCase()==='starter') return false;
-    if(w.length<=3) return false;
-    return true;
-  });
+  const pool=filterVocabByScope();
   const n=settings.vocabN;
   if(pool.length<Math.min(10,n)) throw new Error('單字庫太少或範圍過窄');
   const pick=shuffle(pool).slice(0,n);
@@ -551,13 +464,6 @@ async function startVocabQuiz(){
 
 async function startGrammarQuiz(){
   const n=settings.grammarN;
-  const grammarLines = pickGrammarListForAI(25);
-  if(grammarLines.length < 3){
-    showError('文法庫太少或範圍過窄（請到功能設定勾選範圍）。');
-    return;
-  }
-  const grammarList = grammarLines.join("\n");
-
   try{
     showLoading('正在生成題目請稍後');
     const out=await gjson(`你是國中英文出題老師。${difficultyGuide()}
@@ -566,13 +472,12 @@ async function startGrammarQuiz(){
 規則：
 - 題目文法必須落在下列清單
 - prompt 不要以 Choose the 開頭
-- 句子自然通順，不要童書句
-- 至少 30% 題目結合兩個概念（例如時態+連接詞 / 助動詞+頻率副詞）
-- options 必須剛好 4 個
 - answer 必須等於 options 其中之一（不可用 A/B/C/D）
+- 句子自然通順，不要童書句
+- 至少 40% 題目結合兩個概念（例如時態+連接詞 / 助動詞+頻率副詞）
 文法清單：
-${grammarList}`, '請開始出題。');
-
+${grammarList}`,
+      '題目範圍：國七文法（be/do/does/介系詞/時態/there is/are/祈使句）。');
     const raw=(out.questions||[]).slice(0,n);
     const qs=raw.map((x,i)=>{const fixed=normalizeOptions4(x.options,x.answer); return {kind:'mc', prompt:x.prompt||`題目 ${i+1}`, options:fixed.options, answer:fixed.answer};});
     hideLoading();
@@ -582,37 +487,30 @@ ${grammarList}`, '請開始出題。');
 }
 
 async function startReadingQuiz(){
-  const words=settings.readingWords;
-  const qCount=settings.readingQn;
-
-  const wordsList = pickWordListForAI(80).join(', ');
-  const grammarList = pickGrammarListForAI(14).join('\n');
-
+  const words=settings.readingWords; const qn=settings.readingQn;
   try{
     showLoading('正在生成題目請稍後');
     const out=await gjson(`你是國中英文閱讀出題老師。${difficultyGuide()}
-請產出一篇約 ${words} 字英文短文，並產出 ${qCount} 題四選一。
+請產出一篇約 ${wordsN} 字短文，並產出 ${qn} 題四選一（options 剛好 4 個）。
 只回 JSON：{ "passage":"...", "questions":[ { "prompt":"...", "options":[...], "answer":"..." } ] }
 
-重點：
-- 文章必須通順、有意義、像真實國中閱讀文章（不要童書句、不要怪句）。
-- 請優先使用「單字清單」與「文法清單」，但以自然通順為主，不必硬塞。
-- 允許常見功能字不在清單內（a/an/the, is/are, do/does/did, can, and/but/because/when, in/on/at 等）。
-- 每句平均 12–18 字，避免過短句連發。
+文章要求：
+- 以「通順、有意義、像真正文章」為最高優先
+- 內容詞彙至少 50% 來自單字清單（允許基本功能字不在清單內）
+- 文法盡量使用文法清單中的至少 3 個文法點（不要硬塞到不通順）
+- 每句平均 12–18 字，避免過短句連發
 
 題目要求：
-- 題型涵蓋主旨、細節、推論、字義（題數>4可加）
-- options 必須剛好 4 個
+- 題型包含：主旨、細節、推論、字義（題數>4可再加）
 - answer 必須等於 options 其中之一（不可用 A/B/C/D）
 
 單字清單：
-${wordsList}
+${words.join(", ")}
 
 文法清單：
-${grammarList}`, '請開始出題。');
-
+${grammarList}`, '國七程度。');
     const passage=out.passage||'';
-    const raw=(out.questions||[]).slice(0,qCount);
+    const raw=(out.questions||[]).slice(0,qn);
     const qs=raw.map((x,i)=>{const fixed=normalizeOptions4(x.options,x.answer); return {kind:'mc', prompt:x.prompt||`題目 ${i+1}`, options:fixed.options, answer:fixed.answer};});
     hideLoading();
     quiz={type:'reading', meta:'閱讀測驗', idx:0, score:0, questions:qs, passage};
@@ -622,22 +520,9 @@ ${grammarList}`, '請開始出題。');
 
 async function startSpellingQuiz(){
   const n=settings.spellingN;
-  const wordList = pickWordListForAI(80);
-  if(wordList.length < 10){
-    showError('單字庫太少或範圍過窄（請到功能設定勾選範圍）。');
-    return;
-  }
   try{
     showLoading('正在生成題目請稍後');
-    const out=await gjson(`你是國中英文老師。${difficultyGuide()}
-請「只使用下列單字作為答案」出 ${n} 題拼字填空。
-只回 JSON：{ "questions":[ { "prompt":"... ______ ...", "answer":"..." } ] }
-規則：
-- answer 必須完全等於單字清單其中之一（原形/小寫即可）
-- prompt 句子要自然通順，挖空用 ______，且句子中不要出現答案本身
-單字清單：
-${wordList.join(", ")}`, '請開始出題。');
-
+    const out=await gjson(`你是國中英文老師。請產出 ${n} 題拼字填空。只回 JSON：{ "questions":[ { "prompt":"...", "answer":"..." } ] }。規則：prompt 句子挖空用 ______；answer 為正確拼字。`, '國七程度。');
     const raw=(out.questions||[]).slice(0,n);
     const qs=raw.map((x,i)=>{const ans=(x.answer||'').trim(); let prompt=x.prompt||`拼字題 ${i+1}`; if(prompt.includes('______')&&ans){const first=ans[0], last=ans[ans.length-1]; const hint=spellingHint(ans); const seg=new RegExp(first+'\\s*______\\s*'+last); if(seg.test(prompt)) prompt=prompt.replace(seg,hint); else prompt=prompt.replace('______',hint);} return {kind:'text', prompt, answer:ans};});
     hideLoading();
@@ -648,32 +533,26 @@ ${wordList.join(", ")}`, '請開始出題。');
 
 async function startFindMistakeQuiz(){
   const n=settings.mistakeN;
-  const grammarLines = pickGrammarListForAI(20);
-  if(grammarLines.length < 3){
-    showError('文法庫太少或範圍過窄（請到功能設定勾選範圍）。');
-    return;
-  }
-  const grammarList = grammarLines.join("\n");
-
   try{
     showLoading('正在生成題目請稍後');
     const out=await gjson(`你是國中英文老師。${difficultyGuide()}
 請「只依照下列文法點」出 ${n} 題「選出錯誤」。
-只回 JSON：{ "questions":[ { "prompt":"...", "choices":["on","time","...","..."], "wrong":"on", "correction":"in" } ] }
+只回 JSON：
+{ "questions":[ { "prompt":"...", "choices":["on","time","...","..."], "wrong":"on", "correction":"in" } ] }
 規則：
 - choices 必須剛好 4 個，且為純文字（不要含【】）
 - prompt 必須包含 choices 的四個字，並在句子中用【】標示四個字（都要標）
 - wrong 必須等於 choices 其中之一（錯誤那個）
 - correction 是正確用法（單字或片語），語意需通順
-- prompt 不要包含反引號或奇怪符號
+- prompt 不要包含奇怪符號
 文法清單：
-${grammarList}`, '請開始出題。');
-
+${grammarList}`, '國七程度，介系詞/時態/主詞動詞一致/冠詞。');
     const raw=(out.questions||[]).slice(0,n);
     const qs=raw.map((x,i)=>{
       const choices=Array.isArray(x.choices)?x.choices.map(s=>String(s).trim()).filter(Boolean).slice(0,4):[];
       const wrong=String(x.wrong||'').trim();
-      let prompt=(x.prompt||`題目 ${i+1}`).replace(/`/g,'').replace(/【/g,'').replace(/】/g,'');
+      // strip brackets in prompt then re-wrap all candidates
+      let prompt=(x.prompt||`題目 ${i+1}`).replace(/【/g,'').replace(/】/g,'');
       for(const t of choices){
         const reTok=new RegExp('\\b'+t.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\b','g');
         prompt=prompt.replace(reTok,'【'+t+'】');
@@ -687,23 +566,18 @@ ${grammarList}`, '請開始出題。');
 }
 
 async function startClozeQuiz(){
-  const words=settings.clozeWords;
-  const qCount=settings.clozeQn;
-
-  const wordsList = pickWordListForAI(80).join(', ');
-  const grammarList = pickGrammarListForAI(14).join('\n');
-
+  const words=settings.clozeWords; const qn=settings.clozeQn;
   try{
     showLoading('正在生成題目請稍後');
     const out=await gjson(`你是國中英文老師。${difficultyGuide()}
-請產出約 ${words} 字克漏字短文 + ${qCount} 題四選一。
+請產出約 ${wordsN} 字克漏字短文 + ${qn} 題四選一（options 剛好 4 個）。
 只回 JSON：{ "passage":"...", "questions":[ { "prompt":"(1) ...", "options":[...], "answer":"..." } ] }
 
-重點：
-- 文章必須通順、有意義（像段考短文），不要硬塞造成不自然。
-- 請優先使用「單字清單」與「文法清單」，但以語意通順為主。
-- 允許常見功能字不在清單內。
-- 空格格式必須是 ___(1)___ 到 ___(${qCount})___（要有底線）。
+短文要求：
+- 文章務必通順、有意義
+- 內容詞彙至少 50% 來自單字清單（允許基本功能字）
+- 文法盡量使用文法清單中的至少 3 個文法點
+- 空格格式必須是 ___(1)___ 到 ___(${qn})___（要有底線）
 
 題目要求：
 - options 必須剛好 4 個
@@ -711,13 +585,12 @@ async function startClozeQuiz(){
 - 空格考點分散：介系詞/時態/連接詞/代名詞/可數不可數等
 
 單字清單：
-${wordsList}
+${words.join(", ")}
 
 文法清單：
-${grammarList}`, '請開始出題。');
-
+${grammarList}`, '國七程度。');
     let passage=clozeNormalizePassage(out.passage||'');
-    const raw=(out.questions||[]).slice(0,qCount);
+    const raw=(out.questions||[]).slice(0,qn);
     const qs=raw.map((x,i)=>{const fixed=normalizeOptions4(x.options,x.answer); return {kind:'mc', prompt:x.prompt||`第${i+1}題`, options:fixed.options, answer:fixed.answer};});
     hideLoading();
     quiz={type:'cloze', meta:'克漏字', idx:0, score:0, questions:qs, passage};
@@ -832,8 +705,7 @@ async function boot(){
   renderVocab();
   renderGrammar();
   badge(false,'AI：尚未連線');
-  try{ if(globalThis.GEMINI_API_KEY && !globalThis.GEMINI_API_KEY.includes('PASTE_')) await pickModel(); }catch(e){}
-  setView('aiquiz');
+setView('aiquiz');
 }
 
 window.addEventListener('error',(ev)=>{ console.error('Front-end error:', ev?.error||ev?.message); });
