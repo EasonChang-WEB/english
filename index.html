@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>AI國中英文測驗</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --ink:#1d1d1f;--muted:#6a6a6f;--line:#e9e6df;
+      --accent:#1f7a70;--accent2:#d1592a;--good:#1f7a4d;--bad:#b42318;
+      --shadow:0 16px 50px rgba(25,20,10,.10);--radius:22px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Noto Sans TC",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:var(--ink);
+      background:radial-gradient(900px 600px at 10% 0%, rgba(31,122,112,.12), transparent 60%),
+      radial-gradient(900px 600px at 90% 10%, rgba(209,89,42,.10), transparent 60%),
+      linear-gradient(180deg,#fbfaf7,#f7f3ea);min-height:100vh}
+    .wrap{max-width:1180px;margin:0 auto;padding:22px 16px 56px}
+    header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:16px}
+    .brand h1{margin:0;font-size:34px;line-height:1.1}
+    .badge{display:inline-flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);background:rgba(255,255,255,.70);
+      border-radius:999px;font-size:14px;color:var(--muted);backdrop-filter:blur(10px);user-select:none;}
+    .dot{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+    .grid{display:grid;grid-template-columns:310px 1fr;gap:16px;align-items:start}
+    @media(max-width:980px){.grid{grid-template-columns:1fr}}
+    .card{background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+    .card .hd{padding:16px 16px 12px;border-bottom:1px solid var(--line);
+      background:linear-gradient(135deg, rgba(31,122,112,.10), rgba(209,89,42,.06))}
+    .card .hd h2{margin:0;font-size:20px}
+    .card .bd{padding:16px}
+    .nav{display:flex;flex-direction:column;gap:10px}
+    .navBtn{display:flex;align-items:center;justify-content:space-between;width:100%;padding:14px;border-radius:18px;border:1px solid var(--line);
+      background:rgba(255,255,255,.85);cursor:pointer;font-size:18px;transition:.12s transform,.12s border}
+    .navBtn:hover{transform:translateY(-1px);border-color:#d9d3c8}
+    .navBtn.active{border-color:rgba(31,122,112,.45);background:rgba(31,122,112,.10);color:var(--accent);font-weight:800}
+    .chip{font-size:12px;color:var(--muted);border:1px solid var(--line);padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.70)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .divider{height:1px;background:var(--line);margin:14px 0}
+    .item{padding:14px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.88)}
+    .t{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start}
+    .t b{font-size:18px}
+    .t span{color:var(--muted);font-size:14px}
+    .small{font-size:14px;color:var(--muted);line-height:1.6}
+    input[type="text"],select{width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);font-size:16px;outline:none;background:rgba(255,255,255,.92)}
+    .btn{border:1px solid var(--line);background:#fff;padding:12px 14px;border-radius:16px;font-size:16px;cursor:pointer;transition:.12s transform,.12s border}
+    .btn:hover{transform:translateY(-1px);border-color:#d9d3c8}
+    .btn.primary{border-color:rgba(31,122,112,.45);background:rgba(31,122,112,.10);color:var(--accent);font-weight:800}
+    .hidden{display:none !important}
+    /* Quiz */
+    .quizTop{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.7);font-size:13px;color:var(--muted)}
+    .progress{height:10px;background:#f0ece3;border-radius:999px;overflow:hidden;border:1px solid var(--line);flex:1;min-width:220px}
+    .bar{height:100%;width:0%;background:linear-gradient(90deg, rgba(31,122,112,.85), rgba(209,89,42,.70))}
+    .qTitle{font-size:22px;line-height:1.4;margin:10px 0 6px}
+    .passage{white-space:pre-wrap;line-height:1.7;font-size:17px;background:rgba(255,255,255,.78);border:1px dashed rgba(31,122,112,.35);padding:14px;border-radius:18px;margin:10px 0}
+    .options{display:grid;gap:10px;margin-top:12px}
+    .opt{text-align:left;padding:14px;border-radius:18px;border:1px solid var(--line);background:rgba(255,255,255,.9);font-size:18px;cursor:pointer;transition:.12s transform,.12s border}
+    .opt:hover{transform:translateY(-1px);border-color:#d9d3c8}
+    .opt.correct{border-color:rgba(31,122,77,.45);background:rgba(31,122,77,.10)}
+    .opt.wrong{border-color:rgba(180,35,24,.45);background:rgba(180,35,24,.08)}
+    .feedback{margin-top:12px;font-size:16px;padding:12px 14px;border-radius:18px;border:1px solid var(--line);background:rgba(255,255,255,.78)}
+    .feedback.good{border-color:rgba(31,122,77,.45);background:rgba(31,122,77,.10)}
+    .feedback.bad{border-color:rgba(180,35,24,.45);background:rgba(180,35,24,.08)}
+    /* Modal */
+    .modalMask{position:fixed;inset:0;background:rgba(10,10,10,.35);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+    .modal{width:min(680px,100%);background:rgba(255,255,255,.98);border:1px solid var(--line);border-radius:26px;box-shadow:var(--shadow);overflow:hidden}
+    .modalHd{display:none}
+    .modalBd{padding:22px;text-align:center}
+    .loadingBar{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:14px}
+    .loadingDot{width:10px;height:10px;border-radius:50%;background:var(--accent);opacity:.25;animation:blink 1s infinite}
+    .loadingDot:nth-child(2){animation-delay:.2s}
+    .loadingDot:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,100%{opacity:.25}50%{opacity:1}}
+    /* Explain */
+    .explainText{font-size:18px;line-height:1.7;text-align:left}
+    .centerRow{display:flex;justify-content:center;margin-top:16px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><h1>AI國中英文測驗</h1></div>
+    <div class="badge" id="apiBadge"><span class="dot"></span><span>AI：尚未連線</span></div>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <div class="hd"><h2>功能選單</h2></div>
+      <div class="bd">
+        <div class="nav">
+          <button class="navBtn active" data-view="vocab">單字庫 <span class="chip">Vocab</span></button>
+          <button class="navBtn" data-view="grammar">文法庫 <span class="chip">Grammar</span></button>
+          <button class="navBtn" data-view="aiquiz">AI測驗庫 <span class="chip">Quiz</span></button>
+          <button class="navBtn" data-view="stats">測驗統計 <span class="chip">Stats</span></button>
+          <button class="navBtn" data-view="settings">功能設定 <span class="chip">Settings</span></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="hd"><h2 id="mainTitle">單字庫</h2></div>
+      <div class="bd">
+
+        <div id="viewVocab">
+          <div class="row">
+            <input id="vocabSearch" type="text" placeholder="搜尋單字或中文…" style="flex:1;min-width:240px"/>
+            <select id="vocabFilterUnit" style="width:220px"><option value="">全部單元</option></select>
+          </div>
+          <div class="divider"></div>
+          <div class="list" id="vocabList"></div>
+        </div>
+
+        <div id="viewGrammar" class="hidden">
+          <div class="row">
+            <input id="grammarSearch" type="text" placeholder="搜尋文法…" style="flex:1;min-width:240px"/>
+            <select id="grammarFilterUnit" style="width:220px"><option value="">全部單元</option></select>
+          </div>
+          <div class="divider"></div>
+          <div class="list" id="grammarList"></div>
+        </div>
+
+        <div id="viewAiQuiz" class="hidden">
+          <div class="item">
+            <div class="t"><b>開始測驗</b><span></span></div>
+            <div class="divider"></div>
+            <div class="row">
+              <button class="btn primary" id="startVocabQuiz">單字測驗</button>
+              <button class="btn primary" id="startGrammarQuiz">文法測驗</button>
+              <button class="btn primary" id="startReadingQuiz">閱讀測驗</button>
+              <button class="btn primary" id="startSpellingQuiz">拼字填空</button>
+              <button class="btn primary" id="startFindMistakeQuiz">選出錯誤</button>
+              <button class="btn primary" id="startClozeQuiz">克漏字</button>
+            </div>
+          </div>
+        </div>
+
+        
+        <div id="viewStats" class="hidden">
+          <div class="item">
+            <div class="t"><b>測驗統計</b><span></span></div>
+            <div class="divider"></div>
+            <div class="row">
+              <div class="item" style="flex:1;min-width:220px">
+                <div class="t"><b>練習次數</b><span id="statSessions">0</span></div>
+                <div class="small">完成的測驗次數</div>
+              </div>
+              <div class="item" style="flex:1;min-width:220px">
+                <div class="t"><b>平均分數</b><span id="statAvg">0</span></div>
+                <div class="small">所有測驗平均</div>
+              </div>
+              <div class="item" style="flex:1;min-width:220px">
+                <div class="t"><b>錯題數</b><span id="statWrong">0</span></div>
+                <div class="small">期間內錯題累積</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="item">
+            <div class="t"><b>各測驗統計</b><span></span></div>
+            <div class="divider"></div>
+            <div id="statsByType"></div>
+          </div>
+        </div>
+
+        <div id="viewSettings" class="hidden">
+          <div class="item">
+            <div class="t"><b>測驗範圍設定</b><span></span></div>
+            <div class="divider"></div>
+            <div class="row">
+              <label class="small"><input type="checkbox" id="scopeAll"> 全選</label>
+            </div>
+            <div class="row" id="scopeList"></div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="item">
+            <div class="t"><b>各測驗題數與閱讀設定</b><span></span></div>
+            <div class="divider"></div>
+            <div class="row">
+              <label class="small">單字測驗題數
+                <select id="setVocabN" style="width:120px">
+                  <option>5</option><option selected>10</option><option>15</option><option>20</option>
+                </select>
+              </label>
+              <label class="small">文法測驗題數
+                <select id="setGrammarN" style="width:120px">
+                  <option>5</option><option selected>10</option><option>15</option><option>20</option>
+                </select>
+              </label>
+              <label class="small">拼字填空題數
+                <select id="setSpellingN" style="width:120px">
+                  <option>5</option><option selected>10</option><option>15</option><option>20</option>
+                </select>
+              </label>
+              <label class="small">選出錯誤題數
+                <select id="setMistakeN" style="width:120px">
+                  <option>5</option><option selected>10</option><option>15</option><option>20</option>
+                </select>
+              </label>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <label class="small">閱讀測驗字數
+                <select id="setReadingWords" style="width:120px">
+                  <option>100</option><option selected>200</option><option>300</option><option>400</option>
+                </select>
+              </label>
+              <label class="small">閱讀測驗題數
+                <select id="setReadingQn" style="width:120px">
+                  <option>3</option><option>4</option><option selected>5</option>
+                </select>
+              </label>
+              <label class="small">克漏字字數
+                <select id="setClozeWords" style="width:120px">
+                  <option>100</option><option selected>150</option><option>200</option>
+                </select>
+              </label>
+              <label class="small">克漏字題數
+                <select id="setClozeQn" style="width:120px">
+                  <option>3</option><option>4</option><option selected>5</option>
+                </select>
+              </label>
+            </div>
+            <div class="centerRow">
+              <button class="btn primary" id="btnSaveSettings">儲存設定</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="viewQuiz" class="hidden">
+          <div class="quizTop">
+            <div class="pill" id="quizMeta">—</div>
+            <div class="progress"><div class="bar" id="progBar"></div></div>
+            <div class="pill"><b id="scoreLive">0</b> 分</div>
+          </div>
+
+          <div id="readingBox" class="hidden">
+            <div class="passage" id="readingPassage"></div>
+            <div class="divider"></div>
+          </div>
+
+          <div class="qTitle" id="qTitle">—</div>
+
+          <div id="inputBox" class="hidden">
+            <div class="small">輸入英文答案（Enter 送出）</div>
+            <div style="height:8px"></div>
+            <input id="textAnswer" type="text" placeholder="type here..."/>
+            <div style="height:10px"></div>
+            <button class="btn primary" id="btnSubmitText">送出</button>
+          </div>
+
+          <div class="options" id="options"></div>
+          <div id="feedback" class="feedback hidden"></div>
+
+          <div class="row hidden" id="ackRow" style="justify-content:flex-end; margin-top:10px; gap:10px;">
+            <button class="btn" id="btnExplain">跟我解釋</button>
+            <button class="btn primary" id="btnAcknowledge">下一題</button>
+          </div>
+        </div>
+
+        <div id="viewResult" class="hidden">
+          <div class="item">
+            <div class="t"><b>測驗完成</b><span id="resultMeta">—</span></div>
+            <div style="height:10px"></div>
+            <div style="font-size:46px;font-weight:800" id="finalScore">0</div>
+            <div class="small" id="finalNote">—</div>
+          </div>
+          <div class="centerRow"><button class="btn primary" id="btnResultRetry">回到 AI測驗庫</button></div>
+        </div>
+
+        <div id="viewError" class="hidden">
+          <div class="item" style="border-color:rgba(180,35,24,.35)">
+            <div class="t"><b>出題失敗</b><span></span></div>
+            <div style="height:10px"></div>
+            <div class="small" id="errText">—</div>
+          </div>
+          <div class="centerRow"><button class="btn" id="btnErrClose">關閉</button></div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+</div>
+
+<div id="loadingMask" class="modalMask hidden" aria-hidden="true">
+  <div class="modal"><div class="modalBd">
+    <div class="small" id="loadingText">正在生成題目請稍後</div>
+    <div class="loadingBar"><div class="loadingDot"></div><div class="loadingDot"></div><div class="loadingDot"></div></div>
+  </div></div>
+</div>
+
+<div id="explainMask" class="modalMask hidden" aria-hidden="true">
+  <div class="modal"><div class="modalBd">
+    <div class="explainText" id="explainText">—</div>
+    <div class="centerRow"><button class="btn primary" id="btnExplainOk">我理解了</button></div>
+  </div></div>
+</div>
+
+<script src="./config.js" defer></script>
+<script src="./data.js" defer></script>
+<script src="./script.js" defer></script>
+</body>
+</html>
