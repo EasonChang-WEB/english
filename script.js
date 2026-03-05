@@ -11,6 +11,47 @@ function formatMarked(t){if(!t) return t; return t.replace(/\*\*(.+?)\*\*/g,'【
 function spellingHint(ans){const w=(ans||'').trim(); if(w.length<3) return w; return w[0]+'_'.repeat(Math.max(1,w.length-2))+w[w.length-1];}
 function clozeNormalizePassage(p){if(!p) return p; return p.replace(/(?<!_)\((\d+)\)(?!_)/g,'___($1)___');}
 
+
+function getScopeSet(){
+  try{
+    const s = (settings && settings.scope) ? settings.scope : {};
+    const set = new Set();
+    for(const k in s){ if(s[k]!==false) set.add(k); }
+    return set;
+  }catch(e){
+    return new Set();
+  }
+}
+function pickWordListForAI(maxN){
+  const vocab = (window.appData?.vocabulary || []);
+  const set = getScopeSet();
+  const words = [];
+  for(const v of vocab){
+    const key = `${v.book||''} ${v.unit||''}`.trim();
+    if(set.size && !set.has(key)) continue;
+    const w = String(v.word||'').trim();
+    if(w) words.push(w);
+  }
+  const uniq = Array.from(new Set(words.map(w=>w.toLowerCase()))).map(lw=>{
+    const hit = words.find(w=>w.toLowerCase()===lw);
+    return hit || lw;
+  });
+  return shuffle(uniq).slice(0, maxN);
+}
+function pickGrammarListForAI(maxN){
+  const rules = (window.appData?.grammar_rules || []);
+  const set = getScopeSet();
+  const items = [];
+  for(const g of rules){
+    const key = `${g.book||''} ${g.unit||''}`.trim();
+    if(set.size && !set.has(key)) continue;
+    const title = String(g.title||'').trim();
+    if(!title) continue;
+    const ex = Array.isArray(g.examples)? g.examples.slice(0,2).join(" / ") : "";
+    items.push(`${key}｜${title}${ex?`｜例：${ex}`:""}`);
+  }
+  return items.slice(0, maxN);
+}
 // localStorage
 function loadJson(k,f){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(f));}catch(e){return f;}}
 function saveJson(k,v){localStorage.setItem(k,JSON.stringify(v));}
@@ -56,6 +97,17 @@ let currentWrong=0;
 
 
 // Badge
+
+async function pingProxy(){
+  try{
+    const r = await fetch("https://english-test.replit.app/ping", {method:"GET"});
+    if(r.ok) badge(true,"AI：已連線");
+    else badge(false,"AI：尚未連線");
+  }catch(e){
+    badge(false,"AI：尚未連線");
+  }
+}
+
 function badge(ok,text){const b=$('#apiBadge'); if(!b) return; const dot=b.querySelector('.dot'); const label=b.querySelector('span:last-child'); if(label) label.textContent=text|| (ok?'AI：已連線':'AI：尚未連線'); if(dot) dot.style.background=ok?'var(--good)':'var(--accent)';}
 
 // Views
@@ -252,10 +304,53 @@ function isModelBad(msg){msg=(msg||'').toLowerCase();return msg.includes('no lon
 function modelCandidates(){const pref=Array.isArray(globalThis.GEMINI_MODEL_PREFERENCE)?globalThis.GEMINI_MODEL_PREFERENCE:[];const out=[];const seen=new Set();for(const m of pref){if(m&&!seen.has(m)){seen.add(m);out.push(m);}}return out;}
 async function callGemini(model,system,user){
 
-    // Prevent double-click bursts
+    // Prevent concurrent requests (avoids bursts -> 429)
     if(window.__AI_IN_FLIGHT__){
       throw new Error('AI 忙碌中，請稍後再試');
     }
+    window.__AI_IN_FLIGHT__ = true;
+
+    const url = "https://english-test.replit.app/ai";
+    const body = { model, system, user };
+
+    try{
+      for(let attempt=0; attempt<=2; attempt++){
+        const r = await fetch(url,{
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body:JSON.stringify(body)
+        });
+
+        if(r.status===429){
+          const wait = 1500 * (attempt+1);
+          await new Promise(res=>setTimeout(res, wait));
+          continue;
+        }
+
+        const ct = (r.headers.get('content-type')||'').toLowerCase();
+        if(ct.includes('application/json')){
+          const jr = await r.json();
+          if(!r.ok){
+            throw new Error(jr?.error || JSON.stringify(jr));
+          }
+          badge(true,'AI：已連線');
+          const text = (jr?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('');
+          try{
+            return JSON.parse(text);
+          }catch(e){
+            const c=text.replace(/^```json\s*/i,'').replace(/```\s*$/i,'').trim();
+            return JSON.parse(c);
+          }
+        }else{
+          const t = await r.text();
+          throw new Error(`Proxy HTTP ${r.status}: ${t.slice(0,200)}`);
+        }
+      }
+      throw new Error('AI 請求過於頻繁（429），請稍後再試');
+    }finally{
+      window.__AI_IN_FLIGHT__ = false;
+    }
+  }
     window.__AI_IN_FLIGHT__ = true;
 
     const url = "https://english-test.replit.app/ai";
@@ -703,8 +798,8 @@ async function testAIConnection(){
     badge(true,'AI：已連線');
   }catch(e){
     badge(false,'AI：尚未連線');
-  testAIConnection();
-  testAIConnection();
+  pingProxy();
+  pingProxy();
   }
 }
 
