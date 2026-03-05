@@ -491,7 +491,7 @@ async function startReadingQuiz(){
   try{
     showLoading('正在生成題目請稍後');
     const out=await gjson(`你是國中英文閱讀出題老師。${difficultyGuide()}
-請產出一篇約 ${wordsN} 字短文，並產出 ${qn} 題四選一（options 剛好 4 個）。
+請產出一篇約 ${words} 字短文，並產出 ${qn} 題四選一（options 剛好 4 個）。
 只回 JSON：{ "passage":"...", "questions":[ { "prompt":"...", "options":[...], "answer":"..." } ] }
 
 文章要求：
@@ -570,7 +570,7 @@ async function startClozeQuiz(){
   try{
     showLoading('正在生成題目請稍後');
     const out=await gjson(`你是國中英文老師。${difficultyGuide()}
-請產出約 ${wordsN} 字克漏字短文 + ${qn} 題四選一（options 剛好 4 個）。
+請產出約 ${words} 字克漏字短文 + ${qn} 題四選一（options 剛好 4 個）。
 只回 JSON：{ "passage":"...", "questions":[ { "prompt":"(1) ...", "options":[...], "answer":"..." } ] }
 
 短文要求：
@@ -693,6 +693,18 @@ function wire(){
   $('#btnErrClose').onclick=()=>setView('aiquiz');
 
   $('#btnSaveSettings').onclick=()=>{ saveSettingsFromUI(); alert('已儲存'); };
+}
+
+
+async function testAIConnection(){
+  try{
+    // very small request to confirm proxy works
+    await gjson('Return JSON: {"ok": true}', 'Return JSON: {"ok": true}');
+    badge(true,'AI：已連線');
+  }catch(e){
+    badge(false,'AI：尚未連線');
+  testAIConnection();
+  }
 }
 
 async function boot(){
