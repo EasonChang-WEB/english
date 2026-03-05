@@ -271,13 +271,55 @@ function isModelBad(msg){msg=(msg||'').toLowerCase();return msg.includes('no lon
 function modelCandidates(){const pref=Array.isArray(globalThis.GEMINI_MODEL_PREFERENCE)?globalThis.GEMINI_MODEL_PREFERENCE:[];const out=[];const seen=new Set();for(const m of pref){if(m&&!seen.has(m)){seen.add(m);out.push(m);}}return out;}
 async function callGemini(model,system,user){
 
-    const url = "https://english-test.replit.app/ai";
+    // Prevent spam / double-click bursts that trigger 429
+    if(window.__AI_IN_FLIGHT__){
+      throw new Error('AI 忙碌中，請稍後再試');
+    }
+    window.__AI_IN_FLIGHT__ = true;
 
-    const body = {
-      model,
-      system,
-      user
-    };
+    const url = "https://english-test.replit.app/ai";
+    const body = { model, system, user };
+
+    try{
+      // Backoff retry for 429
+      for(let attempt=0; attempt<=2; attempt++){
+        const r = await fetch(url,{
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body:JSON.stringify(body)
+        });
+
+        if(r.status===429){
+          const wait = 1200 * (attempt+1);
+          await new Promise(res=>setTimeout(res, wait));
+          continue;
+        }
+
+        const ct = (r.headers.get('content-type')||'').toLowerCase();
+
+        if(ct.includes('application/json')){
+          const jr = await r.json();
+          if(!r.ok){
+            throw new Error(jr?.error || JSON.stringify(jr));
+          }
+          const text = (jr?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('');
+          try{
+            return JSON.parse(text);
+          }catch(e){
+            const c=text.replace(/^```json\s*/i,'').replace(/```\s*$/i,'').trim();
+            return JSON.parse(c);
+          }
+        }else{
+          const t = await r.text();
+          if(!r.ok) throw new Error(`Proxy HTTP ${r.status}: ${t.slice(0,200)}`);
+          throw new Error('Proxy 回傳非 JSON，請確認 Replit main.py 是否為 proxy 版本');
+        }
+      }
+      throw new Error('AI 請求過於頻繁（429），請稍後再試');
+    }finally{
+      window.__AI_IN_FLIGHT__ = false;
+    }
+  };
 
     const r = await fetch(url,{
       method:'POST',
@@ -690,7 +732,7 @@ function ensureDifficultyUI(){
   const sel = document.createElement('select');
   sel.id = 'setDifficulty';
   sel.style.width = '120px';
-  ['基礎','標準','挑戰'].forEach(v=>{
+  ['基礎','標準','挑戰','會考'].forEach(v=>{
     const op=document.createElement('option');
     op.value=v; op.textContent=v;
     sel.appendChild(op);
@@ -719,9 +761,11 @@ function getDifficulty(){
 }
 function difficultyGuide(){
   const d=getDifficulty();
-  if(d==='基礎') return '難度：基礎（國七程度，句子較短，常見字彙）';
-  if(d==='挑戰') return '難度：挑戰（國八~國九，句子較長，干擾選項更迷惑）';
-  return '難度：標準（國八程度，句子自然，含常見混淆點）';
+  if(d==='基礎') return '難度：基礎（國七程度；句子較短；選項差異較大）';
+  if(d==='標準') return '難度：標準（國八程度；句子自然；至少部分選項具混淆性）';
+  if(d==='挑戰') return '難度：挑戰（國八後段~國九；句子較長；干擾選項更像）';
+  if(d==='會考') return '難度：會考（偏會考/段考；情境更完整；混淆選項比例更高）';
+  return '難度：標準（國八程度）';
 }
 
 function syncSettingsToUI(){
