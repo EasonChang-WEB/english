@@ -966,12 +966,9 @@ function templateTagOf(g) {
 
   // ====== 智慧 Cache 系統 ======
   const LS_GRAMMAR_CACHE  = "eason_grammar_cache_v1";
-  const LS_MISTAKE_CACHE   = "eason_mistake_cache_v1";
-  const LS_SPELLING_CACHE  = "eason_spelling_cache_v1";
-  const CACHE_BATCH_SIZE   = 20; // 每次批次產題數量（降低首次等待）
-  const CACHE_REFILL_AT    = 8;  // 剩餘題數低於此值時背景補貨
-  let   lastRefillTime     = 0;  // 冷卻保護：避免短時間重複觸發
-  const REFILL_COOLDOWN_MS = 30000; // 30 秒內不重複補貨
+  const LS_MISTAKE_CACHE  = "eason_mistake_cache_v1";
+  const CACHE_BATCH_SIZE  = 30; // 每次批次產題數量
+  const CACHE_REFILL_AT   = 10; // 剩餘題數低於此值時背景補貨
 
   // 計算資料指紋：文法點數量 + 最後一個 id + 難度
   function computeGrammarFingerprint() {
@@ -1116,67 +1113,11 @@ ${grammarList.join("\n")}`,
     return qs;
   }
 
-  // ====== AI 批次產題：拼字填空 ======
-  // 拼字填空的指紋：單字庫數量 + 範圍
-  function computeSpellingFingerprint() {
-    const pool = filterVocabByScope();
-    if (!pool.length) return "empty";
-    const last = pool[pool.length - 1]?.word || "";
-    return `spelling_${pool.length}_${last}_${getDifficulty()}`;
-  }
-
-  async function batchGenerateSpellingQuestions(silent = false) {
-    const wordList = pickWordListForAI(80);
-    if (wordList.length < 10) return [];
-    if (!silent) showLoading("正在預備拼字題庫，首次需要稍等…");
-
-    const n = CACHE_BATCH_SIZE;
-    const fp = computeSpellingFingerprint();
-
-    const out = await gjson(
-`你是國中英文老師。${difficultyGuide()}
-請「只使用下列單字作為答案」出 ${n} 題拼字填空。
-只回 JSON：{ "questions":[ { "prompt":"... ______ ...", "answer":"...", "zh":"整句中文翻譯" } ] }
-規則：
-- answer 必須完全等於單字清單其中之一
-- prompt 句子要自然通順，挖空用 ______，且句子中不要出現答案本身
-- zh 是整句英文句子的完整中文翻譯（包含填入答案後的完整句義）
-- 禁止重複相同句子
-單字清單：
-${wordList.join(", ")}`, "請開始出題。"
-    );
-
-    const raw = (out.questions || []).slice(0, n);
-    const qs = raw.map((x, i) => {
-      const ans = (x.answer || "").trim();
-      let prompt = x.prompt || `拼字題 ${i + 1}`;
-      if (prompt.includes("______") && ans) {
-        const hint = spellingHint(ans);
-        const first = ans[0], last = ans[ans.length - 1];
-        const seg = new RegExp(first + "\\s*______\\s*" + last);
-        if (seg.test(prompt)) prompt = prompt.replace(seg, hint);
-        else prompt = prompt.replace("______", hint);
-      }
-      return { kind: "text", prompt, answer: ans, zh: (x.zh || "").trim() };
-    }).filter(q => q.answer);
-
-    // 拼字用獨立 key 存，指紋也不同
-    const cache = loadCache(LS_SPELLING_CACHE);
-    const existing = cache.fingerprint === fp ? cache.questions : [];
-    saveCache(LS_SPELLING_CACHE, fp, existing.concat(qs));
-
-    if (!silent) hideLoading();
-    return qs;
-  }
-
-  // 背景靜默補貨（不打斷使用者，含冷卻保護）
+  // 背景靜默補貨（不打斷使用者）
   function silentRefillIfNeeded(lsKey, generator) {
-    if (window.__AI_IN_FLIGHT__) return;
-    const now = Date.now();
-    if (now - lastRefillTime < REFILL_COOLDOWN_MS) return; // 冷卻中
+    if (window.__AI_IN_FLIGHT__) return; // AI 忙碌中就不補
     const count = cacheCount(lsKey);
     if (count <= CACHE_REFILL_AT) {
-      lastRefillTime = now;
       generator(true).catch(e => console.warn("背景補貨失敗：", e));
     }
   }
@@ -1453,43 +1394,44 @@ ${wordList.join(", ")}`, "請開始出題。"
     }
   }
 
-  async function startSpellingQuiz() {
+async function startSpellingQuiz() {
     const n = settings.spellingN || 10;
     const wordList = pickWordListForAI(80);
     if (wordList.length < 10) { showError("單字庫太少或範圍過窄"); return; }
 
     try {
       wrongCount = 0;
+      showLoading("正在生成題目請稍後");
+      const out = await gjson(
+`你是國中英文老師。${difficultyGuide()}
+請「只使用下列單字作為答案」出 ${n} 題拼字填空。
+只回 JSON：{ "questions":[ { "prompt":"... ______ ...", "answer":"...", "zh":"整句中文翻譯" } ] }
+規則：
+- answer 必須完全等於單字清單其中之一
+- prompt 句子要自然通順，挖空用 ______，且句子中不要出現答案本身
+- zh 是整句英文句子的完整中文翻譯（包含填入答案後的完整句義）
+單字清單：
+${wordList.join(", ")}`, "請開始出題。"
+      );
 
-      const fp = computeSpellingFingerprint();
-      const cache = loadCache(LS_SPELLING_CACHE);
-      const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
-
-      if (!cacheOk) {
-        saveCache(LS_SPELLING_CACHE, fp, []);
-        await batchGenerateSpellingQuestions(false);
-      }
-
-      // 從 spelling cache 抽題
-      const sc = loadCache(LS_SPELLING_CACHE);
-      const qs = sc.questions.splice(0, n);
-      saveCache(LS_SPELLING_CACHE, sc.fingerprint, sc.questions);
-
-      if (!qs.length) throw new Error("題庫產生失敗，請再試一次");
+      const raw = (out.questions || []).slice(0, n);
+      const qs = raw.map((x, i) => {
+        const ans = (x.answer || "").trim();
+        let prompt = x.prompt || `拼字題 ${i + 1}`;
+        if (prompt.includes("______") && ans) {
+          const first = ans[0], last = ans[ans.length - 1];
+          const hint = spellingHint(ans);
+          const seg = new RegExp(first + "\\s*______\\s*" + last);
+          if (seg.test(prompt)) prompt = prompt.replace(seg, hint);
+          else prompt = prompt.replace("______", hint);
+        }
+        return { kind: "text", prompt, answer: ans, zh: (x.zh || "").trim() };
+      });
 
       hideLoading();
       quiz = { type: "spelling", meta: "拼字填空", idx: 0, score: 0, questions: qs };
       showOnly("viewQuiz");
       renderQ();
-
-      // 背景補貨（拼字用獨立冷卻）
-      setTimeout(() => {
-        if (window.__AI_IN_FLIGHT__) return;
-        if (loadCache(LS_SPELLING_CACHE).questions.length <= CACHE_REFILL_AT) {
-          batchGenerateSpellingQuestions(true).catch(e => console.warn("拼字背景補貨失敗：", e));
-        }
-      }, 2000);
-
     } catch (e) {
       hideLoading();
       showError("拼字填空出題失敗：" + (e.message || String(e)));
@@ -1669,42 +1611,6 @@ ${grammarList}`, "請開始出題。"
     if (!list) return;
     list.innerHTML = "";
 
-    // ── 快速選冊按鈕（依資料動態產生有哪些冊）──
-    const books = Array.from(new Set(scopeKeys.map(it => it.book))).filter(Boolean);
-    if (books.length) {
-      const quickRow = document.createElement("div");
-      quickRow.className = "row";
-      quickRow.style.cssText = "margin-bottom:10px;flex-wrap:wrap;gap:8px;";
-
-      const quickLabel = document.createElement("span");
-      quickLabel.className = "small";
-      quickLabel.textContent = "快速選：";
-      quickRow.appendChild(quickLabel);
-
-      for (const book of books) {
-        const btn = document.createElement("button");
-        btn.className = "btn";
-        btn.style.cssText = "padding:6px 12px;font-size:13px;border-radius:999px;";
-        btn.textContent = book;
-        btn.onclick = () => {
-          // 先全部取消，再勾選該冊
-          for (const it of scopeKeys) settings.scope[it.key] = false;
-          for (const it of scopeKeys) {
-            if (it.book === book) settings.scope[it.key] = true;
-          }
-          renderScopeUI(scopeKeys);
-        };
-        quickRow.appendChild(btn);
-      }
-      list.appendChild(quickRow);
-
-      const divider = document.createElement("div");
-      divider.className = "divider";
-      divider.style.margin = "0 0 10px";
-      list.appendChild(divider);
-    }
-
-    // ── 個別單元 checkbox ──
     for (const it of scopeKeys) {
       const id = "sc_" + it.key.replace(/\s+/g, "_");
       const wrap = document.createElement("label");
@@ -1759,11 +1665,10 @@ ${grammarList}`, "請開始出題。"
     if ($("#setClozeQn")) settings.clozeQn = parseInt($("#setClozeQn").value, 10);
     if ($("#setDifficulty")) settings.difficulty = $("#setDifficulty").value;
 
-    // 難度改變 → 清掉文法、改錯、拼字 cache
+    // 難度改變 → 清掉文法與改錯 cache，下次開測驗自動重產
     if (settings.difficulty !== oldDifficulty) {
       try { localStorage.removeItem(LS_GRAMMAR_CACHE); } catch(e) {}
       try { localStorage.removeItem(LS_MISTAKE_CACHE); } catch(e) {}
-      try { localStorage.removeItem(LS_SPELLING_CACHE); } catch(e) {}
     }
 
     saveJson(LS_SETTINGS, settings);
