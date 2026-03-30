@@ -3,9 +3,7 @@ globalThis.GEMINI_API_KEY = "";
 
 globalThis.GEMINI_MODEL_PREFERENCE = [
   "models/gemini-2.5-flash",
-  "models/gemini-2.5-pro",
   "models/gemini-2.0-flash",
-  "models/gemini-1.5-flash",
 ];
 
 globalThis.READING_WORDS_TARGET = 300;

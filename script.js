@@ -173,7 +173,8 @@
   }
 
   const settings = loadJson(LS_SETTINGS, defaultSettings());
-  if (!settings.difficulty) settings.difficulty = "標準";
+  // 移除已廢棄難度，強制對齊到有效值
+  if (!settings.difficulty || !["標準","挑戰"].includes(settings.difficulty)) settings.difficulty = "標準";
   if (!settings.scope) settings.scope = {};
 
   function getDifficulty() {
@@ -181,19 +182,47 @@
   }
   function difficultyGuide() {
     const d = getDifficulty();
-    if (d === "基礎") return "難度：基礎（國七程度；句子較短；選項差異較大）";
-    if (d === "標準") return "難度：標準（國八程度；句子自然；至少部分選項具混淆性）";
-    if (d === "挑戰") return "難度：挑戰（國八後段~國九；句子較長；干擾選項更像；常見易錯點）";
-    if (d === "會考") return "難度：會考（偏會考/段考；情境更完整；混淆選項比例更高；推論/字義更像考題）";
-    return "難度：標準（國八程度）";
+    if (d === "挑戰") return "難度：挑戰（國八後段～國九；句子較長；干擾選項更像；常見易錯點；多個文法點交叉）";
+    return "難度：標準（國八程度；句子自然；至少部分選項具混淆性；涵蓋兩個文法點交叉）";
+  }
+
+  function difficultyPromptRules(kind) {
+    const d = getDifficulty();
+    if (kind === "grammar") {
+      if (d === "挑戰") return "每題必須交叉考至少 2 個不同文法點；至少 5 題交叉考 3 個文法點；禁止重複 year-old / how old / be + adjective / weather 基本問答模板；句型必須明顯多樣。";
+      return "每題必須交叉考至少 2 個不同文法點；句子自然通順；干擾選項具混淆性；禁止只考單一 be動詞。";
+    }
+    if (kind === "mistake") {
+      if (d === "挑戰") return "每題使用兩種以上文法知識交錯，但仍只設 1 個錯誤；句子長度適中，避免重複模板；不可重複出現 When school will be over 這個句子。";
+      return "句子自然，錯誤點不可過於明顯；涵蓋多種文法錯誤類型；不可重複出現 When school will be over 這個句子。";
+    }
+    return "";
   }
 
   // ====== Data ======
   const data = { vocab: [], grammar: [] };
 
   function loadData() {
-    data.vocab = (window.appData?.vocabulary || []).slice();
-    data.grammar = (window.appData?.grammar_rules || []).slice();
+    data.vocab = (window.vocabularyData || window.appData?.vocabulary || []).slice();
+
+    const gp = Array.isArray(window.grammarPoints) ? window.grammarPoints : [];
+    if (gp.length) {
+      data.grammar = gp.map(g => ({
+        id: g.id,
+        book: g.book,
+        unit: g.unit,
+        title: g.title,
+        group: g.group || "",
+        pattern: g.pattern || "",
+        explanation: g.explanation || "",
+        examples: Array.isArray(g.examples) ? g.examples : [],
+        commonErrors: Array.isArray(g.commonErrors) ? g.commonErrors : [],
+        difficulty: g.difficulty || 2,
+        questionTypes: Array.isArray(g.questionTypes) ? g.questionTypes : []
+      }));
+    } else {
+      data.grammar = (window.appData?.grammar_rules || []).slice();
+    }
   }
 
   function scopeKeyOf(book, unit) {
@@ -289,17 +318,47 @@
 
   // ====== Normalize options ======
   function normalizeOptions4(options, answer) {
-    let opts = Array.isArray(options) ? options.map(s => String(s).trim()).filter(Boolean) : [];
+    function canonOption(s) {
+      return normEn(String(s || "")
+        .replace(/aren't/gi, "are not")
+        .replace(/isn't/gi, "is not")
+        .replace(/wasn't/gi, "was not")
+        .replace(/weren't/gi, "were not")
+        .replace(/don't/gi, "do not")
+        .replace(/doesn't/gi, "does not")
+        .replace(/didn't/gi, "did not")
+        .replace(/won't/gi, "will not")
+        .replace(/can't/gi, "can not")
+        .replace(/I'm/gi, "I am")
+        .replace(/you're/gi, "you are")
+        .replace(/we're/gi, "we are")
+        .replace(/they're/gi, "they are")
+        .replace(/he's/gi, "he is")
+        .replace(/she's/gi, "she is")
+        .replace(/it's/gi, "it is"));
+    }
 
+    let opts = Array.isArray(options) ? options.map(s => String(s).trim()).filter(Boolean) : [];
     if (typeof answer === "string" && /^[A-D]$/i.test(answer.trim())) {
       const idx = answer.trim().toUpperCase().charCodeAt(0) - 65;
       if (opts[idx]) answer = opts[idx];
     }
 
     opts = opts.filter(o => !/^[A-D]$/i.test(o));
-    opts = Array.from(new Set(opts));
+    const seen = new Set();
+    opts = opts.filter(o => {
+      const c = canonOption(o);
+      if (seen.has(c)) return false;
+      seen.add(c);
+      return true;
+    });
 
-    if (answer && !opts.includes(answer)) opts.push(answer);
+    if (answer) {
+      const cAns = canonOption(answer);
+      const existing = opts.find(o => canonOption(o) === cAns);
+      if (!existing) opts.push(answer);
+      else answer = existing;
+    }
 
     const fillers = ["(A) None of these", "(B) All of these", "(C) Not sure", "(D) No idea"];
     let i = 0;
@@ -310,10 +369,442 @@
 
     opts = shuffle(opts).slice(0, 4);
     if (answer && !opts.includes(answer)) opts[0] = answer;
-
     return { options: opts, answer };
   }
 
+  const grammarSessionRecent = [];
+  const grammarTemplateRecent = [];
+
+function getDifficultyBand() {
+    const d = settings.difficulty || "標準";
+    if (d === "基礎") return { min: 1, max: 1, comboPattern: [1], blankPattern: [1], examLike: false };
+    if (d === "標準") return { min: 1, max: 2, comboPattern: [1, 1, 1, 2], blankPattern: [1], examLike: false };
+    if (d === "挑戰") return { min: 1, max: 3, comboPattern: [1, 2, 1, 2], blankPattern: [1, 1, 2], examLike: true };
+    return { min: 2, max: 4, comboPattern: [1, 2, 2, 3], blankPattern: [1, 2, 2, 3], examLike: true };
+  }
+
+  function randomPick(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function titleKeyOf(g) {
+    return normEn((g.title || "") + " | " + (g.pattern || ""));
+  }
+
+function templateTagOf(g) {
+  const t = normEn(
+    (g.title || "") + " " +
+    (g.pattern || "") + " " +
+    (g.group || "")
+  );
+
+  if (
+    t.includes("year-old") ||
+    t.includes("how old") ||
+    t.includes("years old")
+  ) return "age";
+
+  if (t.includes("weather") || t.includes("天氣")) return "weather";
+
+  if (
+    t.includes("be動詞") ||
+    t.includes(" am ") ||
+    t.includes(" is ") ||
+    t.includes(" are ")
+  ) return "be";
+
+  if (t.includes("possessive") || t.includes("所有格")) return "possessive";
+
+  if (
+    t.includes("there is") ||
+    t.includes("there are") ||
+    t.includes("there be")
+  ) return "therebe";
+
+  return "other";
+}
+
+  function pointSummary(g) {
+    const ex = Array.isArray(g.examples) ? g.examples.slice(0, 2).join(" / ") : "";
+    return [scopeKeyOf(g.book, g.unit), g.title || "", g.pattern || "", ex].filter(Boolean).join("｜");
+  }
+
+  function pickGrammarSpecs(n, preferMistakes) {
+    const band = getDifficultyBand();
+    let pool = filterGrammarByScope().filter(
+      g => (g.difficulty || 2) >= band.min && (g.difficulty || 2) <= band.max
+    );
+    if (!pool.length) pool = filterGrammarByScope().slice();
+
+    const byGroupCount = new Map();
+    const byTitleCount = new Map();
+    const specs = [];
+
+    for (let i = 0; i < n; i++) {
+      let comboSize = randomPick(band.comboPattern);
+      if (comboSize > pool.length) comboSize = Math.min(1, pool.length);
+
+      const chosen = [];
+      const usedScopes = new Set();
+      const usedGroups = new Set();
+
+      for (let k = 0; k < comboSize; k++) {
+        let candidates = pool.filter(g => !chosen.some(x => x.id === g.id));
+
+        if (preferMistakes) {
+          const errPool = candidates.filter(g => Array.isArray(g.commonErrors) && g.commonErrors.length);
+          if (errPool.length) candidates = errPool;
+        }
+
+        let cool = candidates.filter(g => !grammarSessionRecent.includes(g.id));
+        if (cool.length >= Math.max(4, Math.floor(candidates.length * 0.35))) {
+          candidates = cool;
+        }
+
+        cool = candidates.filter(g => !grammarTemplateRecent.includes(templateTagOf(g)));
+        if (cool.length >= Math.max(3, Math.floor(candidates.length * 0.25))) {
+          candidates = cool;
+        }
+
+        candidates.sort((a, b) => {
+          const ag = byGroupCount.get(a.group || "") || 0;
+          const bg = byGroupCount.get(b.group || "") || 0;
+          if (ag !== bg) return ag - bg;
+
+          const at = byTitleCount.get(titleKeyOf(a)) || 0;
+          const bt = byTitleCount.get(titleKeyOf(b)) || 0;
+          if (at !== bt) return at - bt;
+
+          const as = usedGroups.has(a.group || "") ? 1 : 0;
+          const bs = usedGroups.has(b.group || "") ? 1 : 0;
+          if (as !== bs) return as - bs;
+
+          return Math.random() - 0.5;
+        });
+
+        const pick = candidates[0];
+        if (!pick) break;
+
+        chosen.push(pick);
+        usedScopes.add(scopeKeyOf(pick.book, pick.unit));
+        usedGroups.add(pick.group || "");
+
+        byGroupCount.set(pick.group || "", (byGroupCount.get(pick.group || "") || 0) + 1);
+        byTitleCount.set(titleKeyOf(pick), (byTitleCount.get(titleKeyOf(pick)) || 0) + 1);
+
+        grammarSessionRecent.push(pick.id);
+        while (grammarSessionRecent.length > 18) grammarSessionRecent.shift();
+
+        grammarTemplateRecent.push(templateTagOf(pick));
+        while (grammarTemplateRecent.length > 10) grammarTemplateRecent.shift();
+      }
+
+      specs.push({
+        points: chosen,
+        scope: Array.from(usedScopes),
+        blankCount: randomPick(band.blankPattern),
+        examLike: !!band.examLike
+      });
+    }
+
+    return specs;
+  }
+
+  function buildGrammarPromptFromSpecs(specs) {
+    return specs.map((s, idx) => {
+      const header = `Q${idx + 1}｜空格數:${s.blankCount}｜範圍:${s.scope.join(", ")}`;
+      const lines = s.points.map((p, i) => `文法${i + 1}: ${pointSummary(p)}`);
+      return [header].concat(lines).join("\n");
+    }).join("\n\n");
+  }
+
+
+  const LOCAL_BANK = {
+    names: ["Amy", "Ben", "Cindy", "David", "Eric", "Jenny", "Kevin", "Linda", "Mia", "Tony"],
+    family: ["my brother", "my sister", "my father", "my mother", "my cousin", "our teacher"],
+    places: ["the park", "the library", "the zoo", "the night market", "the station", "the supermarket", "school"],
+    rooms: ["the kitchen", "the living room", "the classroom", "the bathroom", "my bedroom"],
+    countables: ["books", "chairs", "students", "cookies", "apples", "pencils", "eggs", "tickets"],
+    singulars: ["book", "chair", "student", "cookie", "apple", "pencil", "ticket", "box"],
+    uncountables: ["milk", "water", "juice", "rice", "bread", "soup", "tea", "homework"],
+    verbsBase: ["go", "play", "watch", "visit", "clean", "study", "help", "wash"],
+    pastVerbs: [
+      { base: "go", past: "went", ing: "going" },
+      { base: "play", past: "played", ing: "playing" },
+      { base: "watch", past: "watched", ing: "watching" },
+      { base: "do", past: "did", ing: "doing" },
+      { base: "study", past: "studied", ing: "studying" },
+      { base: "read", past: "read", ing: "reading" }
+    ],
+    transport: ["by bus", "by bike", "by MRT", "on foot"],
+    weathers: ["sunny", "rainy", "cloudy", "windy", "hot", "cold"],
+    times: ["tomorrow", "next Sunday", "after dinner", "this weekend", "next week"],
+    prepPlaces: ["on the table", "under the chair", "in the box", "next to the door", "behind the sofa"],
+    adjectives: ["happy", "busy", "hungry", "tired", "careful", "excited"],
+    objects: ["it", "them", "him", "her"],
+    possessives: ["my", "your", "his", "her", "our", "their"],
+    whTime: ["When", "What time"],
+    modals: ["can", "should", "must"]
+  };
+
+  function rpick(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function shuffleCopy(arr) {
+    return shuffle((arr || []).slice());
+  }
+
+  function grammarCatsOf(points) {
+    const joined = normEn((points || []).map(p => [p.title || "", p.pattern || "", p.group || "", p.subGroup || "", p.mapBranch || ""].join(" ")).join(" || "));
+    const set = new Set();
+
+    if (joined.includes("past progressive") || joined.includes("過去進行")) set.add("past_progressive");
+    if (joined.includes("past simple") || joined.includes("過去簡單") || joined.includes("過去式")) set.add("past_simple");
+    if (joined.includes("future") || joined.includes("will") || joined.includes("be going to") || joined.includes("未來")) set.add("future");
+    if (joined.includes("time clause") || joined.includes("when") || joined.includes("before") || joined.includes("after") || joined.includes("時間子句")) set.add("time_clause");
+    if (joined.includes("there be") || joined.includes("there is") || joined.includes("there are")) set.add("therebe");
+    if (joined.includes("some / any") || joined.includes("some/any") || joined.includes("some") || joined.includes(" any ")) set.add("some_any");
+    if (joined.includes("quantifier") || joined.includes("數量") || joined.includes("how many") || joined.includes("how much")) set.add("quantity");
+    if (joined.includes("countable") || joined.includes("uncountable") || joined.includes("可數") || joined.includes("不可數")) set.add("countability");
+    if (joined.includes("weather") || joined.includes("天氣")) set.add("weather");
+    if (joined.includes("transportation") || joined.includes("transport") || joined.includes("交通")) set.add("transportation");
+    if (joined.includes("possessive") || joined.includes("所有格")) set.add("possessive");
+    if (joined.includes("pronoun") || joined.includes("代名詞")) set.add("pronoun");
+    if (joined.includes("this") || joined.includes("that") || joined.includes("these") || joined.includes("those") || joined.includes("指示")) set.add("demonstrative");
+    if (joined.includes("plural") || joined.includes("複數")) set.add("plural");
+    if (joined.includes("preposition") || joined.includes("介系詞") || joined.includes("location") || joined.includes("direction")) set.add("preposition");
+    if (joined.includes("be動詞") || joined.includes("be ") || joined.includes("am ") || joined.includes(" is ") || joined.includes(" are ")) set.add("be");
+    if (joined.includes("present simple") || joined.includes("一般現在")) set.add("present_simple");
+    if (joined.includes("modal") || joined.includes("can") || joined.includes("should") || joined.includes("must")) set.add("modal");
+    if (joined.includes("what time") || joined.includes("time") || joined.includes("日期") || joined.includes("reverse-time") || joined.includes("quarter to")) set.add("time_expression");
+
+    if (!set.size) set.add("general");
+    return Array.from(set);
+  }
+
+  function blankify(sentence, answer) {
+    if (!answer) return sentence;
+    return sentence.replace(answer, "______");
+  }
+
+  function buildMc(sentence, answer, options, scope, grammarLabel) {
+    const fixed = normalizeOptions4(options, answer);
+    return { kind: "mc", prompt: sentence, options: fixed.options, answer: fixed.answer, scope, grammarLabel };
+  }
+
+  function makeMistakeQuestion(sentence, parts, wrongIndex, correction, scope, grammarLabel) {
+    return {
+      kind: "mistake",
+      prompt: sentence,
+      choices: parts,
+      wrong: parts[wrongIndex],
+      correction,
+      scope,
+      grammarLabel
+    };
+  }
+
+  function thirdPersonForm(base) {
+    if (/[^aeiou]y$/i.test(base)) return base.replace(/y$/i, "ies");
+    if (/(s|x|ch|sh|o)$/i.test(base)) return base + "es";
+    return base + "s";
+  }
+
+  function genericGrammarQuestion(spec) {
+    const subject = Math.random() < 0.5 ? rpick(LOCAL_BANK.names) : rpick(LOCAL_BANK.family);
+    const verb = rpick(LOCAL_BANK.verbsBase);
+    const place = rpick(LOCAL_BANK.places);
+    const answer = thirdPersonForm(verb);
+    return buildMc(`${subject} ______ to ${place} every day.`, answer, [verb, answer, verb + "ing", verb + "ed"], spec.scope, "present_simple");
+  }
+
+  function localGrammarQuestionFromSpec(spec, idx) {
+    const cats = grammarCatsOf(spec.points);
+    const label = cats.join(",");
+
+    if (cats.includes("past_simple") && cats.includes("past_progressive")) {
+      const who = rpick(LOCAL_BANK.names);
+      const act = rpick(LOCAL_BANK.pastVerbs);
+      const other = rpick(["my mom called me", "the lights went out", "the bus arrived", "it started to rain"]);
+      const prompt = `Last night, ${who} ______ in the living room when ${other}.`;
+      return buildMc(prompt, act.ing, [act.base, act.past, act.ing, thirdPersonForm(act.base)], spec.scope, label);
+    }
+
+    if (cats.includes("therebe") && (cats.includes("some_any") || cats.includes("quantity") || cats.includes("countability"))) {
+      const noun = rpick(LOCAL_BANK.countables);
+      const place = rpick(LOCAL_BANK.prepPlaces);
+      const isQuestion = idx % 2 === 0;
+      if (isQuestion) {
+        const prompt = `______ ${noun} ${place}?`;
+        return buildMc(prompt, "Are there any", ["Are there any", "Is there any", "There are", "There is"], spec.scope, label);
+      }
+      const prompt = `There ______ ${noun} ${place}.`;
+      return buildMc(prompt, "are some", ["is some", "are some", "is any", "are any"], spec.scope, label);
+    }
+
+    if (cats.includes("weather") && cats.includes("transportation")) {
+      const weather = rpick(LOCAL_BANK.weathers);
+      const transport = rpick(LOCAL_BANK.transport);
+      const prompt = `A: It was ${weather} this morning. How did you come to school? B: I came ______.`;
+      return buildMc(prompt, transport, shuffleCopy([transport, "in the bus", "with bike", "take MRT"]), spec.scope, label);
+    }
+
+    if (cats.includes("future") && cats.includes("time_clause")) {
+      const modal = Math.random() < 0.5 ? "will" : "is going to";
+      const verb = rpick(LOCAL_BANK.verbsBase);
+      const place = rpick(LOCAL_BANK.places);
+      const prompt = `When my homework is done, I ______ ${place}.`;
+      const answer = modal === "will" ? `will ${verb}` : `${modal} ${verb}`;
+      const opts = modal === "will"
+        ? [`will ${verb}`, `${verb}`, `am ${verb}ing`, `will be ${verb}ing`]
+        : [`${modal} ${verb}`, `will ${verb}`, `${verb}s`, `${verb}ed`];
+      return buildMc(prompt, answer, opts, spec.scope, label);
+    }
+
+    if ((cats.includes("quantity") || cats.includes("countability")) && idx % 2 === 0) {
+      const countable = rpick(LOCAL_BANK.countables);
+      const uncountable = rpick(LOCAL_BANK.uncountables);
+      if (Math.random() < 0.5) {
+        return buildMc(`______ ${countable} do you need for the party?`, "How many", ["How much", "How many", "How often", "How long"], spec.scope, label);
+      }
+      return buildMc(`______ ${uncountable} is there in the bottle?`, "How much", ["How many", "How much", "How old", "How far"], spec.scope, label);
+    }
+
+    if (cats.includes("possessive") || cats.includes("pronoun")) {
+      const name = rpick(LOCAL_BANK.names);
+      const obj = rpick(["bike", "jacket", "bag", "notebook"]);
+      return buildMc(`This ${obj} is ${name}'s. It is ______.`, "his", ["he", "him", "his", "himself"], spec.scope, label);
+    }
+
+    if (cats.includes("demonstrative") || cats.includes("plural")) {
+      const noun = rpick(LOCAL_BANK.countables);
+      return buildMc(`______ ${noun} on the desk are new.`, "These", ["This", "That", "These", "Those is"], spec.scope, label);
+    }
+
+    if (cats.includes("preposition")) {
+      const thing = rpick(["The bag", "My notebook", "The cat", "The keys"]);
+      const place = rpick(LOCAL_BANK.prepPlaces);
+      const prep = place.split(" ")[0];
+      const opts = Array.from(new Set([prep, "in", "on", "under"])).slice(0,4);
+      return buildMc(`${thing} is ______ ${place.replace(/^\w+\s+/, "")}.`, prep, opts, spec.scope, label);
+    }
+
+    if (cats.includes("be")) {
+      const subject = rpick(["My parents", "The dog", "Jenny", "We"]);
+      const answer = /parents|We/.test(subject) ? "are" : /dog/.test(subject) ? "is" : "is";
+      const opts = answer === "are" ? ["am", "is", "are", "be"] : ["am", "is", "are", "be"];
+      return buildMc(`${subject} ______ busy after school.`, answer, opts, spec.scope, label);
+    }
+
+    if (cats.includes("time_expression")) {
+      return buildMc(`It is a quarter ______ eight now.`, "to", ["to", "for", "at", "of"], spec.scope, label);
+    }
+
+    if (cats.includes("modal")) {
+      const modal = rpick(LOCAL_BANK.modals);
+      const verb = rpick(LOCAL_BANK.verbsBase);
+      return buildMc(`You ${modal} ______ your room before dinner.`, verb, [verb, thirdPersonForm(verb), verb + "ing", "to " + verb], spec.scope, label);
+    }
+
+    if (cats.includes("past_simple")) {
+      const who = rpick(LOCAL_BANK.family);
+      const act = rpick(LOCAL_BANK.pastVerbs);
+      const place = rpick(LOCAL_BANK.places);
+      return buildMc(`${who} ______ to ${place} yesterday.`, act.past, [act.base, act.past, act.ing, thirdPersonForm(act.base)], spec.scope, label);
+    }
+
+    if (cats.includes("present_simple")) {
+      const who = rpick(LOCAL_BANK.family);
+      const verb = rpick(LOCAL_BANK.verbsBase);
+      return buildMc(`${who} usually ______ after dinner.`, thirdPersonForm(verb), [verb, thirdPersonForm(verb), verb + "ing", verb + "ed"], spec.scope, label);
+    }
+
+    return genericGrammarQuestion(spec);
+  }
+
+  function localGrammarQuizFromSpecs(specs) {
+    return specs.map((spec, idx) => localGrammarQuestionFromSpec(spec, idx));
+  }
+
+  function splitSentenceIntoParts(sentence, wrongChunk) {
+    const words = sentence.split(" ");
+    if (words.length < 8) return [sentence, "", "", ""];
+    const parts = [
+      words.slice(0, 2).join(" "),
+      words.slice(2, 4).join(" "),
+      words.slice(4, 6).join(" "),
+      words.slice(6).join(" ")
+    ];
+    let idx = parts.findIndex(p => p.includes(wrongChunk));
+    if (idx < 0) idx = Math.min(1, parts.length - 1);
+    return { parts, idx };
+  }
+
+  function localMistakeQuestionFromSpec(spec, idx) {
+    const cats = grammarCatsOf(spec.points);
+    const label = cats.join(",");
+
+    if (cats.includes("future") && cats.includes("time_clause")) {
+      const sentence = "When school is over, I will visit my grandma.";
+      const wrongSentence = "When school will be over, I will visit my grandma.";
+      const chunk = "will be over,";
+      const shaped = splitSentenceIntoParts(wrongSentence, chunk);
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "when 子句用現在式：is over", spec.scope, label);
+    }
+
+    if (cats.includes("possessive") || cats.includes("pronoun")) {
+      const wrongSentence = "My best friend and me are cleaning the classroom now.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "me are");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "主詞要用 I：My best friend and I are ...", spec.scope, label);
+    }
+
+    if (cats.includes("demonstrative") || cats.includes("plural")) {
+      const wrongSentence = "This books on the table are mine.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "This books");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "複數名詞前要用 These：These books", spec.scope, label);
+    }
+
+    if (cats.includes("therebe") && (cats.includes("some_any") || cats.includes("quantity") || cats.includes("countability"))) {
+      const wrongSentence = "There is many apples in the box.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "is many");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "複數名詞用 are：There are many apples", spec.scope, label);
+    }
+
+    if (cats.includes("preposition")) {
+      const wrongSentence = "My bag is in the table near the window.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "in the");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "桌面上用 on：My bag is on the table", spec.scope, label);
+    }
+
+    if (cats.includes("modal")) {
+      const wrongSentence = "My little brother can to swim very well.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "can to");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "情態動詞後接原形：can swim", spec.scope, label);
+    }
+
+    if (cats.includes("past_simple")) {
+      const wrongSentence = "Last Sunday, my family go to the zoo together.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "family go");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "過去時間用過去式：went", spec.scope, label);
+    }
+
+    if (cats.includes("be")) {
+      const wrongSentence = "My parents is very busy tonight.";
+      const shaped = splitSentenceIntoParts(wrongSentence, "parents is");
+      return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "複數主詞用 are：My parents are", spec.scope, label);
+    }
+
+    const wrongSentence = "He go to school by bus every day.";
+    const shaped = splitSentenceIntoParts(wrongSentence, "He go");
+    return makeMistakeQuestion(wrongSentence, shaped.parts, shaped.idx, "第三人稱單數要加 s：He goes", spec.scope, label);
+  }
+
+  function localMistakeQuizFromSpecs(specs) {
+    return specs.map((spec, idx) => localMistakeQuestionFromSpec(spec, idx));
+  }
+
+  // ====== Stats (today/7/30) ======
   // ====== Stats (today/7/30) ======
   const stats = loadJson(LS_STATS, { sessions: [] });
 
@@ -387,62 +878,307 @@
   }
 
   // ====== Proxy AI call (lock + 429 backoff) ======
-  function getPreferredModel() {
-    const pref = Array.isArray(globalThis.GEMINI_MODEL_PREFERENCE) ? globalThis.GEMINI_MODEL_PREFERENCE : [];
-    if (pref.length) return pref[0];
-    return "models/gemini-2.5-flash";
+  function getPreferredModels() {
+    const pref = Array.isArray(globalThis.GEMINI_MODEL_PREFERENCE)
+      ? globalThis.GEMINI_MODEL_PREFERENCE.slice()
+      : [];
+    const fallbacks = ["models/gemini-2.5-flash", "models/gemini-2.0-flash"];
+    for (const m of fallbacks) if (!pref.includes(m)) pref.push(m);
+    return pref.filter(Boolean);
   }
 
   async function callGemini(model, system, user) {
     if (window.__AI_IN_FLIGHT__) throw new Error("AI 忙碌中，請稍後再試");
     window.__AI_IN_FLIGHT__ = true;
 
-    const payload = { model, system, user };
+    const models = model
+      ? [model, ...getPreferredModels().filter(m => m !== model)]
+      : getPreferredModels();
+
+    let lastErr = "AI 請求失敗";
 
     try {
-      for (let attempt = 0; attempt <= 2; attempt++) {
-        const r = await fetch(PROXY_AI, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+      for (const m of models) {
+        const payload = { model: m, system, user };
 
-        if (r.status === 429) {
-          const wait = 1500 * (attempt + 1);
-          await new Promise(res => setTimeout(res, wait));
-          continue;
-        }
+        for (let attempt = 0; attempt <= 2; attempt++) {
+          const r = await fetch(PROXY_AI, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
 
-        const ct = (r.headers.get("content-type") || "").toLowerCase();
-        if (!ct.includes("application/json")) {
-          const t = await r.text();
-          throw new Error(`Proxy HTTP ${r.status}: ${t.slice(0, 200)}`);
-        }
+          const ct = (r.headers.get("content-type") || "").toLowerCase();
+          if (!ct.includes("application/json")) {
+            const t = await r.text();
+            lastErr = `Proxy HTTP ${r.status}: ${t.slice(0, 200)}`;
+            if (r.status === 429 && attempt < 2) {
+              const wait = 2000 * (attempt + 1);
+              await new Promise(res => setTimeout(res, wait));
+              continue;
+            }
+            break;
+          }
 
-        const jr = await r.json();
-        if (!r.ok) {
-          throw new Error(jr?.error || JSON.stringify(jr));
-        }
+          const jr = await r.json();
 
-        badge(true, "AI：已連線");
+          if (!r.ok) {
+            if (typeof jr?.error === "string") lastErr = jr.error;
+            else {
+              try { lastErr = JSON.stringify(jr).slice(0, 300); }
+              catch (e) { lastErr = `Proxy HTTP ${r.status}`; }
+            }
+            if (r.status === 429 && attempt < 2) {
+              const wait = 2000 * (attempt + 1);
+              await new Promise(res => setTimeout(res, wait));
+              continue;
+            }
+            break;
+          }
 
-        const text = (jr?.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
-        try {
-          return JSON.parse(text);
-        } catch (e) {
-          const c = text.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
-          return JSON.parse(c);
+          badge(true, `AI：已連線（${m.replace("models/","")}）`);
+
+          const rawText = (jr?.candidates?.[0]?.content?.parts || [])
+            .map(p => p.text || "")
+            .join("");
+
+          try {
+            return JSON.parse(rawText);
+          } catch (e) {
+            const cleaned = rawText
+              .replace(/^```json\s*/i, "")
+              .replace(/```\s*$/i, "")
+              .trim();
+            return JSON.parse(cleaned);
+          }
         }
       }
-      throw new Error("AI 請求過於頻繁（429），請稍後再試");
+
+      throw new Error(lastErr || "AI 請求過於頻繁（429），請稍後再試");
     } finally {
       window.__AI_IN_FLIGHT__ = false;
     }
   }
 
   async function gjson(system, user) {
-    const model = getPreferredModel();
-    return await callGemini(model, system, user);
+    return await callGemini("", system, user);
+  }
+
+  // ====== 智慧 Cache 系統 ======
+  const LS_GRAMMAR_CACHE  = "eason_grammar_cache_v1";
+  const LS_MISTAKE_CACHE   = "eason_mistake_cache_v1";
+  const LS_SPELLING_CACHE  = "eason_spelling_cache_v1";
+  const CACHE_BATCH_SIZE   = 20; // 每次批次產題數量（降低首次等待）
+  const CACHE_REFILL_AT    = 8;  // 剩餘題數低於此值時背景補貨
+  let   lastRefillTime     = 0;  // 冷卻保護：避免短時間重複觸發
+  const REFILL_COOLDOWN_MS = 30000; // 30 秒內不重複補貨
+
+  // 計算資料指紋：文法點數量 + 最後一個 id + 難度
+  function computeGrammarFingerprint() {
+    const pool = filterGrammarByScope();
+    if (!pool.length) return "empty";
+    const last = pool[pool.length - 1]?.id || "";
+    return `${pool.length}_${last}_${getDifficulty()}`;
+  }
+
+  function loadCache(lsKey) {
+    try {
+      return JSON.parse(localStorage.getItem(lsKey) || "null") || { fingerprint: "", questions: [] };
+    } catch (e) {
+      return { fingerprint: "", questions: [] };
+    }
+  }
+
+  function saveCache(lsKey, fingerprint, questions) {
+    try {
+      localStorage.setItem(lsKey, JSON.stringify({ fingerprint, questions }));
+    } catch (e) {
+      console.warn("Cache save failed:", e);
+    }
+  }
+
+  function isCacheValid(lsKey) {
+    const cache = loadCache(lsKey);
+    const fp = computeGrammarFingerprint();
+    return cache.fingerprint === fp && cache.questions.length > 0;
+  }
+
+  function drawFromCache(lsKey, n) {
+    const cache = loadCache(lsKey);
+    const drawn = cache.questions.splice(0, n);
+    saveCache(lsKey, cache.fingerprint, cache.questions);
+    return drawn;
+  }
+
+  function appendToCache(lsKey, newQuestions) {
+    const cache = loadCache(lsKey);
+    const fp = computeGrammarFingerprint();
+    // 若指紋已變，捨棄舊題
+    const existing = cache.fingerprint === fp ? cache.questions : [];
+    const merged = existing.concat(newQuestions);
+    saveCache(lsKey, fp, merged);
+  }
+
+  function cacheCount(lsKey) {
+    return loadCache(lsKey).questions.length;
+  }
+
+  // ====== AI 批次產題：文法測驗 ======
+  async function batchGenerateGrammarQuestions(silent = false) {
+    const grammarList = pickGrammarListForAI(40);
+    if (!silent) showLoading("正在預備文法題庫，首次需要稍等…");
+
+    const n = CACHE_BATCH_SIZE;
+    const rules = difficultyPromptRules("grammar");
+    const fp = computeGrammarFingerprint();
+
+    const out = await gjson(
+`你是國中英文文法出題老師。${difficultyGuide()}
+請出 ${n} 題四選一文法選擇題。每題必須交叉考察下方文法清單中 2～3 個不同的文法點，不可只考單一文法點。
+${rules}
+只回 JSON：{ "questions":[ { "prompt":"句子 ______ 句子", "options":["A","B","C","D"], "answer":"正確選項文字", "grammarLabel":"考點說明" } ] }
+
+規則：
+- prompt 用 ______ 表示空格，每題最多 2 個空格
+- options 必須剛好 4 個，answer 必須等於 options 其中之一
+- 干擾選項必須具混淆性，不可明顯錯誤
+- 題目句子要自然、貼近實際生活情境
+- 禁止重複相同句型或句子
+- grammarLabel 說明本題考了哪些文法點（例如：過去進行式＋時間子句）
+
+文法清單（請優先從這些文法點交叉出題）：
+${grammarList.join("\n")}`,
+      "請開始出題。"
+    );
+
+    const raw = (out.questions || []).slice(0, n);
+    const qs = raw.map(x => {
+      const fixed = normalizeOptions4(x.options, x.answer);
+      return { kind: "mc", prompt: x.prompt || "—", options: fixed.options, answer: fixed.answer, grammarLabel: x.grammarLabel || "" };
+    }).filter(q => q.options.length === 4 && q.answer);
+
+    appendToCache(LS_GRAMMAR_CACHE, qs);
+    saveCache(LS_GRAMMAR_CACHE, fp, loadCache(LS_GRAMMAR_CACHE).questions);
+    if (!silent) hideLoading();
+    return qs;
+  }
+
+  // ====== AI 批次產題：選出錯誤 ======
+  async function batchGenerateMistakeQuestions(silent = false) {
+    const grammarList = pickGrammarListForAI(40);
+    if (!silent) showLoading("正在預備改錯題庫，首次需要稍後…");
+
+    const n = CACHE_BATCH_SIZE;
+    const rules = difficultyPromptRules("mistake");
+    const fp = computeGrammarFingerprint();
+
+    const out = await gjson(
+`你是國中英文文法出題老師。${difficultyGuide()}
+請出 ${n} 題「選出錯誤」題。每題提供一個含一個文法錯誤的句子，學生需從四個劃線部分中選出有錯誤的那個。
+${rules}
+只回 JSON：{ "questions":[ { "wrongSentence":"完整錯誤句子", "parts":["詞組A","詞組B","詞組C","詞組D"], "wrongIndex":0, "correction":"錯誤說明與正確寫法", "grammarLabel":"考點" } ] }
+
+規則：
+- wrongSentence 是包含錯誤的完整句子
+- parts 是句子切割成 4 個詞組（通常按順序），錯誤必須在其中某一個
+- wrongIndex 是有錯誤的 parts 索引（0~3）
+- correction 用中文說明錯在哪、正確寫法是什麼
+- 每題只能有一個錯誤
+- 禁止重複出現「When school will be over」句子
+- 禁止重複相同句型
+- 文法錯誤類型要多樣：時態錯誤、主謂不一致、介系詞錯誤、代名詞格錯誤、情態動詞用法、連接詞用法等
+- 句子要自然，像真實段考題目
+
+文法清單（請從這些文法點設計錯誤）：
+${grammarList.join("\n")}`,
+      "請開始出題。"
+    );
+
+    const raw = (out.questions || []).slice(0, n);
+    const qs = raw.map(x => {
+      const parts = Array.isArray(x.parts) && x.parts.length === 4 ? x.parts : null;
+      if (!parts) return null;
+      const wi = typeof x.wrongIndex === "number" ? x.wrongIndex : 0;
+      return {
+        kind: "mistake",
+        prompt: x.wrongSentence || parts.join(" "),
+        choices: parts,
+        wrong: parts[wi],
+        correction: x.correction || "—",
+        grammarLabel: x.grammarLabel || "",
+        scope: []
+      };
+    }).filter(Boolean);
+
+    appendToCache(LS_MISTAKE_CACHE, qs);
+    saveCache(LS_MISTAKE_CACHE, fp, loadCache(LS_MISTAKE_CACHE).questions);
+    if (!silent) hideLoading();
+    return qs;
+  }
+
+  // ====== AI 批次產題：拼字填空 ======
+  // 拼字填空的指紋：單字庫數量 + 範圍
+  function computeSpellingFingerprint() {
+    const pool = filterVocabByScope();
+    if (!pool.length) return "empty";
+    const last = pool[pool.length - 1]?.word || "";
+    return `spelling_${pool.length}_${last}_${getDifficulty()}`;
+  }
+
+  async function batchGenerateSpellingQuestions(silent = false) {
+    const wordList = pickWordListForAI(80);
+    if (wordList.length < 10) return [];
+    if (!silent) showLoading("正在預備拼字題庫，首次需要稍等…");
+
+    const n = CACHE_BATCH_SIZE;
+    const fp = computeSpellingFingerprint();
+
+    const out = await gjson(
+`你是國中英文老師。${difficultyGuide()}
+請「只使用下列單字作為答案」出 ${n} 題拼字填空。
+只回 JSON：{ "questions":[ { "prompt":"... ______ ...", "answer":"...", "zh":"整句中文翻譯" } ] }
+規則：
+- answer 必須完全等於單字清單其中之一
+- prompt 句子要自然通順，挖空用 ______，且句子中不要出現答案本身
+- zh 是整句英文句子的完整中文翻譯（包含填入答案後的完整句義）
+- 禁止重複相同句子
+單字清單：
+${wordList.join(", ")}`, "請開始出題。"
+    );
+
+    const raw = (out.questions || []).slice(0, n);
+    const qs = raw.map((x, i) => {
+      const ans = (x.answer || "").trim();
+      let prompt = x.prompt || `拼字題 ${i + 1}`;
+      if (prompt.includes("______") && ans) {
+        const hint = spellingHint(ans);
+        const first = ans[0], last = ans[ans.length - 1];
+        const seg = new RegExp(first + "\\s*______\\s*" + last);
+        if (seg.test(prompt)) prompt = prompt.replace(seg, hint);
+        else prompt = prompt.replace("______", hint);
+      }
+      return { kind: "text", prompt, answer: ans, zh: (x.zh || "").trim() };
+    }).filter(q => q.answer);
+
+    // 拼字用獨立 key 存，指紋也不同
+    const cache = loadCache(LS_SPELLING_CACHE);
+    const existing = cache.fingerprint === fp ? cache.questions : [];
+    saveCache(LS_SPELLING_CACHE, fp, existing.concat(qs));
+
+    if (!silent) hideLoading();
+    return qs;
+  }
+
+  // 背景靜默補貨（不打斷使用者，含冷卻保護）
+  function silentRefillIfNeeded(lsKey, generator) {
+    if (window.__AI_IN_FLIGHT__) return;
+    const now = Date.now();
+    if (now - lastRefillTime < REFILL_COOLDOWN_MS) return; // 冷卻中
+    const count = cacheCount(lsKey);
+    if (count <= CACHE_REFILL_AT) {
+      lastRefillTime = now;
+      generator(true).catch(e => console.warn("背景補貨失敗：", e));
+    }
   }
 
   // ====== Quiz engine ======
@@ -508,9 +1244,21 @@
     }
 
     const title = $("#qTitle");
-    if (title) title.textContent = `(${quiz.idx + 1}/${quiz.questions.length}) ${formatMarked(cur.prompt || "")}`;
+    if (title) {
+      const scopeHtml = Array.isArray(cur.scope) && cur.scope.length
+        ? '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">' + cur.scope.map(s => `<span style="font-size:12px;color:#9ca3af">${escapeHtml(s)}</span>`).join("") + '</div>'
+        : "";
+      // 拼字題：顯示中文翻譯提示
+      const zhHtml = cur.zh
+        ? `<div style="margin-top:8px;font-size:14px;color:var(--muted);line-height:1.5">📖 ${escapeHtml(cur.zh)}</div>`
+        : "";
+      // 文法/改錯題：顯示考點標籤
+      const labelHtml = cur.grammarLabel
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--accent)">📌 ${escapeHtml(cur.grammarLabel)}</div>`
+        : "";
+      title.innerHTML = `<div>(${quiz.idx + 1}/${quiz.questions.length}) ${escapeHtml(formatMarked(cur.prompt || ""))}</div>${scopeHtml}${zhHtml}${labelHtml}`;
+    }
 
-    // mistake type
     if (cur.kind === "mistake") {
       const box = $("#options");
       if (!box) return;
@@ -537,7 +1285,6 @@
       return;
     }
 
-    // text
     if (cur.kind === "text") {
       const inb = $("#inputBox");
       if (inb) inb.classList.remove("hidden");
@@ -562,7 +1309,6 @@
       return;
     }
 
-    // mc
     const box = $("#options");
     if (!box) return;
     box.innerHTML = "";
@@ -587,6 +1333,7 @@
     }
   }
 
+  // ====== Explain ======
   // ====== Explain ======
   async function explainCurrent() {
     if (!quiz) return;
@@ -668,49 +1415,38 @@
 
   async function startGrammarQuiz() {
     const n = settings.grammarN || 10;
-    const grammarList = pickGrammarListForAI(25).join("\n");
-    if (!grammarList) { showError("文法庫太少或範圍過窄"); return; }
 
-    const confusable = `
-混淆選項要求（很重要）：
-- 選項要彼此相似且容易搞錯，但只有一個是語法正確
-- 常見混淆組合：
-  * 時態：go / goes / went / going；have / has / had / having
-  * 助動詞：do / does / did / doing
-  * 介系詞：in / on / at / for；to / for / with / about
-  * 連接詞：because / so / but / although；before / after / when / while
-  * 可數不可數：much / many / a lot / a lot of
-- 至少 50% 題目需兩個以上選項看起來合理但只有一個正確
-`;
+    if (!filterGrammarByScope().length) {
+      showError("文法庫太少或範圍過窄");
+      return;
+    }
 
     try {
       wrongCount = 0;
-      showLoading("正在生成題目請稍後");
-      const out = await gjson(
-`你是國中英文出題老師。${difficultyGuide()}
-請「只依照下列文法點」出 ${n} 題四選一（options 剛好 4 個）。
-只回 JSON：{ "questions":[ { "prompt":"...", "options":[...], "answer":"..." } ] }
-規則：
-- 題目文法必須落在下列清單
-- prompt 不要以 Choose the 開頭
-- 句子自然通順，不要童書句
-- options 必須剛好 4 個
-- answer 必須等於 options 其中之一（不可用 A/B/C/D）
-${confusable}
-文法清單：
-${grammarList}`, "請開始出題。"
-      );
 
-      const raw = (out.questions || []).slice(0, n);
-      const qs = raw.map((x, i) => {
-        const fixed = normalizeOptions4(x.options, x.answer);
-        return { kind: "mc", prompt: x.prompt || `題目 ${i + 1}`, options: fixed.options, answer: fixed.answer };
-      });
+      // 檢查 cache 是否有效且足夠
+      const fp = computeGrammarFingerprint();
+      const cache = loadCache(LS_GRAMMAR_CACHE);
+      const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
 
-      hideLoading();
+      if (!cacheOk) {
+        // Cache 不足或指紋不符（新資料加入），重新批次產題
+        saveCache(LS_GRAMMAR_CACHE, fp, []); // 清掉舊 cache
+        await batchGenerateGrammarQuestions(false);
+      } else {
+        hideLoading();
+      }
+
+      const qs = drawFromCache(LS_GRAMMAR_CACHE, n);
+      if (!qs.length) throw new Error("題庫產生失敗，請再試一次");
+
       quiz = { type: "grammar", meta: "文法測驗", idx: 0, score: 0, questions: qs };
       showOnly("viewQuiz");
       renderQ();
+
+      // 背景補貨
+      setTimeout(() => silentRefillIfNeeded(LS_GRAMMAR_CACHE, batchGenerateGrammarQuestions), 1500);
+
     } catch (e) {
       hideLoading();
       showError("文法出題失敗：" + (e.message || String(e)));
@@ -724,36 +1460,36 @@ ${grammarList}`, "請開始出題。"
 
     try {
       wrongCount = 0;
-      showLoading("正在生成題目請稍後");
-      const out = await gjson(
-`你是國中英文老師。${difficultyGuide()}
-請「只使用下列單字作為答案」出 ${n} 題拼字填空。
-只回 JSON：{ "questions":[ { "prompt":"... ______ ...", "answer":"..." } ] }
-規則：
-- answer 必須完全等於單字清單其中之一
-- prompt 句子要自然通順，挖空用 ______，且句子中不要出現答案本身
-單字清單：
-${wordList.join(", ")}`, "請開始出題。"
-      );
 
-      const raw = (out.questions || []).slice(0, n);
-      const qs = raw.map((x, i) => {
-        const ans = (x.answer || "").trim();
-        let prompt = x.prompt || `拼字題 ${i + 1}`;
-        if (prompt.includes("______") && ans) {
-          const first = ans[0], last = ans[ans.length - 1];
-          const hint = spellingHint(ans);
-          const seg = new RegExp(first + "\\s*______\\s*" + last);
-          if (seg.test(prompt)) prompt = prompt.replace(seg, hint);
-          else prompt = prompt.replace("______", hint);
-        }
-        return { kind: "text", prompt, answer: ans };
-      });
+      const fp = computeSpellingFingerprint();
+      const cache = loadCache(LS_SPELLING_CACHE);
+      const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
+
+      if (!cacheOk) {
+        saveCache(LS_SPELLING_CACHE, fp, []);
+        await batchGenerateSpellingQuestions(false);
+      }
+
+      // 從 spelling cache 抽題
+      const sc = loadCache(LS_SPELLING_CACHE);
+      const qs = sc.questions.splice(0, n);
+      saveCache(LS_SPELLING_CACHE, sc.fingerprint, sc.questions);
+
+      if (!qs.length) throw new Error("題庫產生失敗，請再試一次");
 
       hideLoading();
       quiz = { type: "spelling", meta: "拼字填空", idx: 0, score: 0, questions: qs };
       showOnly("viewQuiz");
       renderQ();
+
+      // 背景補貨（拼字用獨立冷卻）
+      setTimeout(() => {
+        if (window.__AI_IN_FLIGHT__) return;
+        if (loadCache(LS_SPELLING_CACHE).questions.length <= CACHE_REFILL_AT) {
+          batchGenerateSpellingQuestions(true).catch(e => console.warn("拼字背景補貨失敗：", e));
+        }
+      }, 2000);
+
     } catch (e) {
       hideLoading();
       showError("拼字填空出題失敗：" + (e.message || String(e)));
@@ -762,59 +1498,42 @@ ${wordList.join(", ")}`, "請開始出題。"
 
   async function startFindMistakeQuiz() {
     const n = settings.mistakeN || 10;
-    const grammarList = pickGrammarListForAI(20).join("\n");
-    if (!grammarList) { showError("文法庫太少或範圍過窄"); return; }
 
-    const confusable = `
-混淆選項要求（很重要）：
-- 選項要彼此相似且容易搞錯，但只有一個是語法正確
-- 常見混淆組合：
-  * 時態：go / goes / went / going
-  * 介系詞：in / on / at / for
-  * 連接詞：because / so / but / although
-`;
+    if (!filterGrammarByScope().length) {
+      showError("文法庫太少或範圍過窄");
+      return;
+    }
 
     try {
       wrongCount = 0;
-      showLoading("正在生成題目請稍後");
-      const out = await gjson(
-`你是國中英文老師。${difficultyGuide()}
-請「只依照下列文法點」出 ${n} 題「選出錯誤」。
-只回 JSON：{ "questions":[ { "prompt":"...", "choices":["on","time","...","..."], "wrong":"on", "correction":"in" } ] }
-規則：
-- choices 必須剛好 4 個，且為純文字（不要含【】）
-- prompt 必須包含 choices 的四個字，並在句子中用【】標示四個字（都要標）
-- wrong 必須等於 choices 其中之一（錯誤那個）
-- correction 是正確用法（單字或片語），語意需通順
-- prompt 不要包含奇怪符號
-${confusable}
-文法清單：
-${grammarList}`, "請開始出題。"
-      );
 
-      const raw = (out.questions || []).slice(0, n);
-      const qs = raw.map((x, i) => {
-        const choices = Array.isArray(x.choices) ? x.choices.map(s => String(s).trim()).filter(Boolean).slice(0, 4) : [];
-        const wrong = String(x.wrong || "").trim();
-        let prompt = String(x.prompt || `題目 ${i + 1}`).replace(/`/g, "").replace(/【/g, "").replace(/】/g, "");
-        for (const t of choices) {
-          const reTok = new RegExp("\\b" + t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g");
-          prompt = prompt.replace(reTok, "【" + t + "】");
-        }
-        return { kind: "mistake", prompt, choices, wrong, correction: String(x.correction || "").trim() };
-      });
+      const fp = computeGrammarFingerprint();
+      const cache = loadCache(LS_MISTAKE_CACHE);
+      const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
 
-      hideLoading();
+      if (!cacheOk) {
+        saveCache(LS_MISTAKE_CACHE, fp, []);
+        await batchGenerateMistakeQuestions(false);
+      } else {
+        hideLoading();
+      }
+
+      const qs = drawFromCache(LS_MISTAKE_CACHE, n);
+      if (!qs.length) throw new Error("題庫產生失敗，請再試一次");
+
       quiz = { type: "mistake", meta: "選出錯誤", idx: 0, score: 0, questions: qs };
       showOnly("viewQuiz");
       renderQ();
+
+      setTimeout(() => silentRefillIfNeeded(LS_MISTAKE_CACHE, batchGenerateMistakeQuestions), 1500);
+
     } catch (e) {
       hideLoading();
       showError("選出錯誤出題失敗：" + (e.message || String(e)));
     }
   }
 
-  async function startReadingQuiz() {
+async function startReadingQuiz() {
     const wordsCount = settings.readingWords || 200;
     const qCount = settings.readingQn || 5;
 
@@ -930,7 +1649,7 @@ ${grammarList}`, "請開始出題。"
     const sel = document.createElement("select");
     sel.id = "setDifficulty";
     sel.style.width = "140px";
-    ["基礎", "標準", "挑戰", "會考"].forEach(v => {
+    ["標準", "挑戰"].forEach(v => {
       const op = document.createElement("option");
       op.value = v;
       op.textContent = v;
@@ -950,6 +1669,42 @@ ${grammarList}`, "請開始出題。"
     if (!list) return;
     list.innerHTML = "";
 
+    // ── 快速選冊按鈕（依資料動態產生有哪些冊）──
+    const books = Array.from(new Set(scopeKeys.map(it => it.book))).filter(Boolean);
+    if (books.length) {
+      const quickRow = document.createElement("div");
+      quickRow.className = "row";
+      quickRow.style.cssText = "margin-bottom:10px;flex-wrap:wrap;gap:8px;";
+
+      const quickLabel = document.createElement("span");
+      quickLabel.className = "small";
+      quickLabel.textContent = "快速選：";
+      quickRow.appendChild(quickLabel);
+
+      for (const book of books) {
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.style.cssText = "padding:6px 12px;font-size:13px;border-radius:999px;";
+        btn.textContent = book;
+        btn.onclick = () => {
+          // 先全部取消，再勾選該冊
+          for (const it of scopeKeys) settings.scope[it.key] = false;
+          for (const it of scopeKeys) {
+            if (it.book === book) settings.scope[it.key] = true;
+          }
+          renderScopeUI(scopeKeys);
+        };
+        quickRow.appendChild(btn);
+      }
+      list.appendChild(quickRow);
+
+      const divider = document.createElement("div");
+      divider.className = "divider";
+      divider.style.margin = "0 0 10px";
+      list.appendChild(divider);
+    }
+
+    // ── 個別單元 checkbox ──
     for (const it of scopeKeys) {
       const id = "sc_" + it.key.replace(/\s+/g, "_");
       const wrap = document.createElement("label");
@@ -993,6 +1748,7 @@ ${grammarList}`, "請開始出題。"
   }
 
   function saveSettingsFromUI() {
+    const oldDifficulty = settings.difficulty;
     if ($("#setVocabN")) settings.vocabN = parseInt($("#setVocabN").value, 10);
     if ($("#setGrammarN")) settings.grammarN = parseInt($("#setGrammarN").value, 10);
     if ($("#setSpellingN")) settings.spellingN = parseInt($("#setSpellingN").value, 10);
@@ -1002,6 +1758,13 @@ ${grammarList}`, "請開始出題。"
     if ($("#setClozeWords")) settings.clozeWords = parseInt($("#setClozeWords").value, 10);
     if ($("#setClozeQn")) settings.clozeQn = parseInt($("#setClozeQn").value, 10);
     if ($("#setDifficulty")) settings.difficulty = $("#setDifficulty").value;
+
+    // 難度改變 → 清掉文法、改錯、拼字 cache
+    if (settings.difficulty !== oldDifficulty) {
+      try { localStorage.removeItem(LS_GRAMMAR_CACHE); } catch(e) {}
+      try { localStorage.removeItem(LS_MISTAKE_CACHE); } catch(e) {}
+      try { localStorage.removeItem(LS_SPELLING_CACHE); } catch(e) {}
+    }
 
     saveJson(LS_SETTINGS, settings);
   }
@@ -1065,18 +1828,24 @@ ${grammarList}`, "請開始出題。"
       const u = scopeKeyOf(g.book, g.unit);
       if (uf && u !== uf) return false;
       if (!q) return true;
-      return String(g.title || "").toLowerCase().includes(q);
+      const hay = [g.title || "", g.group || "", g.pattern || "", g.explanation || "", ...(Array.isArray(g.examples) ? g.examples : [])].join(" ").toLowerCase();
+      return hay.includes(q);
     }).sort(compareBookUnitTitle).slice(0, 250);
 
     for (const g of items) {
       const div = document.createElement("div");
       div.className = "item";
-      div.innerHTML =
-        `<div class="t"><b>${escapeHtml(g.title || "")}</b><span>${escapeHtml(scopeKeyOf(g.book, g.unit))}</span></div>`;
+      const groupHtml = g.group ? `<span class="chip">${escapeHtml(g.group)}</span>` : "";
+      const patternHtml = g.pattern ? `<div class="small" style="margin-top:8px"><b>句型：</b>${escapeHtml(g.pattern)}</div>` : "";
+      const exampleText = Array.isArray(g.examples) && g.examples.length ? g.examples.slice(0, 2).join(" / ") : "";
+      const exampleHtml = exampleText ? `<div class="small" style="margin-top:6px"><b>例：</b>${escapeHtml(exampleText)}</div>` : "";
+      const explHtml = g.explanation ? `<div class="small" style="margin-top:6px">${escapeHtml(g.explanation)}</div>` : "";
+      div.innerHTML = `<div class="t"><b>${escapeHtml(g.title || "")}</b><span>${escapeHtml(scopeKeyOf(g.book, g.unit))}</span></div><div style="margin-top:8px">${groupHtml}</div>${patternHtml}${exampleHtml}${explHtml}`;
       box.appendChild(div);
     }
   }
 
+  // ====== Navigation ======
   // ====== Navigation ======
   function setView(view, scopeKeys) {
     $$(".navBtn").forEach(b => b.classList.toggle("active", b.dataset.view === view));
@@ -1105,7 +1874,7 @@ ${grammarList}`, "請開始出題。"
     $("#statRange") && $("#statRange").addEventListener("change", renderStats);
 
     // settings save
-    $("#btnSaveSettings") && ($("#btnSaveSettings").onclick = () => { saveSettingsFromUI(); alert("已儲存"); });
+    $("#btnSaveSettings") && ($("#btnSaveSettings").onclick = () => { saveSettingsFromUI(); alert("設定已儲存"); });
 
     // quiz buttons
     $("#startVocabQuiz") && ($("#startVocabQuiz").onclick = startVocabQuiz);
