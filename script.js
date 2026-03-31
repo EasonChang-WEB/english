@@ -305,15 +305,37 @@
 
   function pickGrammarListForAI(maxN) {
     const pool = filterGrammarByScope();
-    const items = pool.map(g => {
+
+    // 按 book+unit 分組，每組隨機取 1~2 條，確保跨冊分散
+    const byUnit = new Map();
+    for (const g of pool) {
+      const key = scopeKeyOf(g.book, g.unit);
+      if (!byUnit.has(key)) byUnit.set(key, []);
+      byUnit.get(key).push(g);
+    }
+
+    const units = shuffle(Array.from(byUnit.keys()));
+    const picked = [];
+
+    // 每個 unit 輪流取一條，直到達到 maxN
+    let round = 0;
+    while (picked.length < maxN && round < 10) {
+      for (const unit of units) {
+        if (picked.length >= maxN) break;
+        const gs = byUnit.get(unit);
+        const idx = Math.floor(Math.random() * gs.length);
+        picked.push(gs[idx]);
+      }
+      round++;
+    }
+
+    return picked.map(g => {
       const title = String(g.title || "").trim();
       if (!title) return "";
-      const ex = Array.isArray(g.examples) ? g.examples.slice(0, 2).join(" / ") : "";
+      const ex = Array.isArray(g.examples) ? g.examples.slice(0, 1).join(" / ") : "";
       const head = scopeKeyOf(g.book, g.unit);
       return `${head}｜${title}${ex ? `｜例：${ex}` : ""}`.trim();
     }).filter(Boolean);
-    const uniq = Array.from(new Set(items));
-    return uniq.slice(0, maxN);
   }
 
   // ====== Normalize options ======
@@ -1447,13 +1469,11 @@ ${grammarList.join("\n")}`,
     try {
       wrongCount = 0;
 
-      // 檢查 cache 是否有效且足夠
       const fp = computeGrammarFingerprint();
       const cache = loadCache(LS_GRAMMAR_CACHE);
       const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
 
       if (!cacheOk) {
-        // Cache 不足或指紋不符，重新批次產題（不預先清空，失敗時保留舊題）
         await batchGenerateGrammarQuestions(false);
       } else {
         hideLoading();
@@ -1462,12 +1482,12 @@ ${grammarList.join("\n")}`,
       const qs = drawFromCache(LS_GRAMMAR_CACHE, n);
       if (!qs.length) throw new Error("題庫產生失敗，請再試一次");
 
+      // 若不足 n 題（部分批次失敗），用有的題目先開始
       quiz = { type: "grammar", meta: "文法測驗", idx: 0, score: 0, questions: qs };
       showOnly("viewQuiz");
       renderQ();
 
-      // 背景補貨
-      setTimeout(() => silentRefillIfNeeded(LS_GRAMMAR_CACHE, batchGenerateGrammarQuestions), 1500);
+      setTimeout(() => silentRefillIfNeeded(LS_GRAMMAR_CACHE, batchGenerateGrammarQuestions), 2000);
 
     } catch (e) {
       hideLoading();
