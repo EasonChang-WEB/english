@@ -901,7 +901,7 @@ function templateTagOf(g) {
       for (const m of models) {
         const payload = { model: m, system, user };
 
-        for (let attempt = 0; attempt <= 2; attempt++) {
+        for (let attempt = 0; attempt <= 1; attempt++) { // 最多 retry 1 次
           const r = await fetch(PROXY_AI, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -912,9 +912,10 @@ function templateTagOf(g) {
           if (!ct.includes("application/json")) {
             const t = await r.text();
             lastErr = `Proxy HTTP ${r.status}: ${t.slice(0, 200)}`;
-            if (r.status === 429 && attempt < 2) {
-              const wait = 2000 * (attempt + 1);
-              await new Promise(res => setTimeout(res, wait));
+            if (r.status === 429 && attempt === 0) {
+              badge(false, "AI：限流中，等待重試…");
+              await new Promise(res => setTimeout(res, 20000));
+              badge(false, "AI：重試中…");
               continue;
             }
             break;
@@ -928,9 +929,10 @@ function templateTagOf(g) {
               try { lastErr = JSON.stringify(jr).slice(0, 300); }
               catch (e) { lastErr = `Proxy HTTP ${r.status}`; }
             }
-            if (r.status === 429 && attempt < 2) {
-              const wait = 2000 * (attempt + 1);
-              await new Promise(res => setTimeout(res, wait));
+            if (r.status === 429 && attempt === 0) {
+              badge(false, "AI：限流中，等待重試…");
+              await new Promise(res => setTimeout(res, 20000));
+              badge(false, "AI：重試中…");
               continue;
             }
             break;
@@ -954,7 +956,7 @@ function templateTagOf(g) {
         }
       }
 
-      throw new Error(lastErr || "AI 請求過於頻繁（429），請稍後再試");
+      throw new Error(lastErr || "AI 請求過於頻繁（429），請稍後 1 分鐘再試");
     } finally {
       window.__AI_IN_FLIGHT__ = false;
     }
@@ -966,9 +968,12 @@ function templateTagOf(g) {
 
   // ====== 智慧 Cache 系統 ======
   const LS_GRAMMAR_CACHE  = "eason_grammar_cache_v1";
-  const LS_MISTAKE_CACHE  = "eason_mistake_cache_v1";
-  const CACHE_BATCH_SIZE  = 30; // 每次批次產題數量
-  const CACHE_REFILL_AT   = 10; // 剩餘題數低於此值時背景補貨
+  const LS_MISTAKE_CACHE   = "eason_mistake_cache_v1";
+  const LS_SPELLING_CACHE  = "eason_spelling_cache_v1";
+  const CACHE_BATCH_SIZE   = 20; // 每次批次產題數量（降低首次等待）
+  const CACHE_REFILL_AT    = 8;  // 剩餘題數低於此值時背景補貨
+  let   lastRefillTime     = 0;  // 冷卻保護：避免短時間重複觸發
+  const REFILL_COOLDOWN_MS = 30000; // 30 秒內不重複補貨
 
   // 計算資料指紋：文法點數量 + 最後一個 id + 難度
   function computeGrammarFingerprint() {
@@ -1022,102 +1027,179 @@ function templateTagOf(g) {
 
   // ====== AI 批次產題：文法測驗 ======
   async function batchGenerateGrammarQuestions(silent = false) {
-    const grammarList = pickGrammarListForAI(40);
     if (!silent) showLoading("正在預備文法題庫，首次需要稍等…");
 
-    const n = CACHE_BATCH_SIZE;
+    const totalN = CACHE_BATCH_SIZE; // 20 題
+    const batchN = 5;                // 每次只出 5 題，共 4 次
     const rules = difficultyPromptRules("grammar");
     const fp = computeGrammarFingerprint();
+    const allQs = [];
 
-    const out = await gjson(
+    for (let round = 0; round < totalN / batchN; round++) {
+      const grammarList = pickGrammarListForAI(12);
+
+      try {
+        const out = await gjson(
 `你是國中英文文法出題老師。${difficultyGuide()}
-請出 ${n} 題四選一文法選擇題。每題必須交叉考察下方文法清單中 2～3 個不同的文法點，不可只考單一文法點。
+請出 ${batchN} 題四選一文法選擇題，每題交叉考察 2 個不同文法點。
 ${rules}
-只回 JSON：{ "questions":[ { "prompt":"句子 ______ 句子", "options":["A","B","C","D"], "answer":"正確選項文字", "grammarLabel":"考點說明" } ] }
-
-規則：
-- prompt 用 ______ 表示空格，每題最多 2 個空格
-- options 必須剛好 4 個，answer 必須等於 options 其中之一
-- 干擾選項必須具混淆性，不可明顯錯誤
-- 題目句子要自然、貼近實際生活情境
-- 禁止重複相同句型或句子
-- grammarLabel 說明本題考了哪些文法點（例如：過去進行式＋時間子句）
-
-文法清單（請優先從這些文法點交叉出題）：
+只回 JSON：{"questions":[{"prompt":"句子 ______","options":["A","B","C","D"],"answer":"正確選項","grammarLabel":"考點"}]}
+規則：prompt 用 ______，options 4 個，answer 等於 options 其中之一，干擾選項具混淆性。
+文法清單：
 ${grammarList.join("\n")}`,
-      "請開始出題。"
-    );
+          "請開始出題。"
+        );
 
-    const raw = (out.questions || []).slice(0, n);
-    const qs = raw.map(x => {
-      const fixed = normalizeOptions4(x.options, x.answer);
-      return { kind: "mc", prompt: x.prompt || "—", options: fixed.options, answer: fixed.answer, grammarLabel: x.grammarLabel || "" };
-    }).filter(q => q.options.length === 4 && q.answer);
+        const raw = (out.questions || []).slice(0, batchN);
+        const qs = raw.map(x => {
+          const fixed = normalizeOptions4(x.options, x.answer);
+          return { kind: "mc", prompt: x.prompt || "—", options: fixed.options, answer: fixed.answer, grammarLabel: x.grammarLabel || "" };
+        }).filter(q => q.options.length === 4 && q.answer);
 
-    appendToCache(LS_GRAMMAR_CACHE, qs);
-    saveCache(LS_GRAMMAR_CACHE, fp, loadCache(LS_GRAMMAR_CACHE).questions);
+        allQs.push(...qs);
+      } catch (e) {
+        console.warn(`文法第 ${round + 1} 批失敗，略過：`, e.message);
+      }
+
+      // 批次間隔 5 秒，避免觸發限流
+      if (round < totalN / batchN - 1) {
+        await new Promise(res => setTimeout(res, 5000));
+      }
+    }
+
+    // 只有產到題目才存入 cache，不清空舊的
+    if (allQs.length) {
+      appendToCache(LS_GRAMMAR_CACHE, allQs);
+    }
+
     if (!silent) hideLoading();
-    return qs;
+    return allQs;
   }
 
   // ====== AI 批次產題：選出錯誤 ======
   async function batchGenerateMistakeQuestions(silent = false) {
-    const grammarList = pickGrammarListForAI(40);
     if (!silent) showLoading("正在預備改錯題庫，首次需要稍後…");
 
-    const n = CACHE_BATCH_SIZE;
+    const totalN = CACHE_BATCH_SIZE;
+    const batchN = 5;
     const rules = difficultyPromptRules("mistake");
-    const fp = computeGrammarFingerprint();
+    const allQs = [];
 
-    const out = await gjson(
+    for (let round = 0; round < totalN / batchN; round++) {
+      const grammarList = pickGrammarListForAI(12);
+
+      try {
+        const out = await gjson(
 `你是國中英文文法出題老師。${difficultyGuide()}
-請出 ${n} 題「選出錯誤」題。每題提供一個含一個文法錯誤的句子，學生需從四個劃線部分中選出有錯誤的那個。
+請出 ${batchN} 題選出錯誤題，每題含一個文法錯誤，學生選出哪個詞組有錯。
 ${rules}
-只回 JSON：{ "questions":[ { "wrongSentence":"完整錯誤句子", "parts":["詞組A","詞組B","詞組C","詞組D"], "wrongIndex":0, "correction":"錯誤說明與正確寫法", "grammarLabel":"考點" } ] }
-
-規則：
-- wrongSentence 是包含錯誤的完整句子
-- parts 是句子切割成 4 個詞組（通常按順序），錯誤必須在其中某一個
-- wrongIndex 是有錯誤的 parts 索引（0~3）
-- correction 用中文說明錯在哪、正確寫法是什麼
-- 每題只能有一個錯誤
-- 禁止重複出現「When school will be over」句子
-- 禁止重複相同句型
-- 文法錯誤類型要多樣：時態錯誤、主謂不一致、介系詞錯誤、代名詞格錯誤、情態動詞用法、連接詞用法等
-- 句子要自然，像真實段考題目
-
-文法清單（請從這些文法點設計錯誤）：
+只回 JSON：{"questions":[{"wrongSentence":"句子","parts":["詞組A","詞組B","詞組C","詞組D"],"wrongIndex":0,"correction":"說明","grammarLabel":"考點"}]}
+規則：parts 4 個詞組，wrongIndex 是有錯的索引，每題只有一個錯，禁止重複 When school will be over 句子。
+文法清單：
 ${grammarList.join("\n")}`,
-      "請開始出題。"
-    );
+          "請開始出題。"
+        );
 
-    const raw = (out.questions || []).slice(0, n);
-    const qs = raw.map(x => {
-      const parts = Array.isArray(x.parts) && x.parts.length === 4 ? x.parts : null;
-      if (!parts) return null;
-      const wi = typeof x.wrongIndex === "number" ? x.wrongIndex : 0;
-      return {
-        kind: "mistake",
-        prompt: x.wrongSentence || parts.join(" "),
-        choices: parts,
-        wrong: parts[wi],
-        correction: x.correction || "—",
-        grammarLabel: x.grammarLabel || "",
-        scope: []
-      };
-    }).filter(Boolean);
+        const raw = (out.questions || []).slice(0, batchN);
+        const qs = raw.map(x => {
+          const parts = Array.isArray(x.parts) && x.parts.length === 4 ? x.parts : null;
+          if (!parts) return null;
+          const wi = typeof x.wrongIndex === "number" ? x.wrongIndex : 0;
+          return { kind: "mistake", prompt: x.wrongSentence || parts.join(" "), choices: parts, wrong: parts[wi], correction: x.correction || "—", grammarLabel: x.grammarLabel || "", scope: [] };
+        }).filter(Boolean);
 
-    appendToCache(LS_MISTAKE_CACHE, qs);
-    saveCache(LS_MISTAKE_CACHE, fp, loadCache(LS_MISTAKE_CACHE).questions);
+        allQs.push(...qs);
+      } catch (e) {
+        console.warn(`改錯第 ${round + 1} 批失敗，略過：`, e.message);
+      }
+
+      if (round < totalN / batchN - 1) {
+        await new Promise(res => setTimeout(res, 5000));
+      }
+    }
+
+    if (allQs.length) {
+      appendToCache(LS_MISTAKE_CACHE, allQs);
+    }
+
     if (!silent) hideLoading();
-    return qs;
+    return allQs;
   }
 
-  // 背景靜默補貨（不打斷使用者）
+  // ====== AI 批次產題：拼字填空 ======
+  function computeSpellingFingerprint() {
+    const pool = filterVocabByScope();
+    if (!pool.length) return "empty";
+    const last = pool[pool.length - 1]?.word || "";
+    return `spelling_${pool.length}_${last}_${getDifficulty()}`;
+  }
+
+  async function batchGenerateSpellingQuestions(silent = false) {
+    const pool = filterVocabByScope();
+    if (pool.length < 10) return [];
+    if (!silent) showLoading("正在預備拼字題庫，首次需要稍等…");
+
+    const totalN = CACHE_BATCH_SIZE;
+    const batchN = 5;
+    const fp = computeSpellingFingerprint();
+    const allQs = [];
+
+    for (let round = 0; round < totalN / batchN; round++) {
+      // 每批只給 20 個單字，prompt 輕量
+      const wordList = pickWordListForAI(20);
+
+      try {
+        const out = await gjson(
+`你是國中英文老師。${difficultyGuide()}
+只使用下列單字作為答案，出 ${batchN} 題拼字填空。
+只回 JSON：{"questions":[{"prompt":"句子 ______","answer":"單字","zh":"整句中文翻譯"}]}
+規則：answer 等於清單其中一字，prompt 自然通順不含答案本身，zh 為完整句義翻譯。
+單字：${wordList.join(", ")}`,
+          "請開始出題。"
+        );
+
+        const raw = (out.questions || []).slice(0, batchN);
+        const qs = raw.map((x, i) => {
+          const ans = (x.answer || "").trim();
+          let prompt = x.prompt || `拼字題 ${i + 1}`;
+          if (prompt.includes("______") && ans) {
+            const hint = spellingHint(ans);
+            const first = ans[0], last = ans[ans.length - 1];
+            const seg = new RegExp(first + "\\s*______\\s*" + last);
+            if (seg.test(prompt)) prompt = prompt.replace(seg, hint);
+            else prompt = prompt.replace("______", hint);
+          }
+          return { kind: "text", prompt, answer: ans, zh: (x.zh || "").trim() };
+        }).filter(q => q.answer);
+
+        allQs.push(...qs);
+      } catch (e) {
+        console.warn(`拼字第 ${round + 1} 批失敗，略過：`, e.message);
+      }
+
+      if (round < totalN / batchN - 1) {
+        await new Promise(res => setTimeout(res, 5000));
+      }
+    }
+
+    if (allQs.length) {
+      const cache = loadCache(LS_SPELLING_CACHE);
+      const existing = cache.fingerprint === fp ? cache.questions : [];
+      saveCache(LS_SPELLING_CACHE, fp, existing.concat(allQs));
+    }
+
+    if (!silent) hideLoading();
+    return allQs;
+  }
+
+  // 背景靜默補貨（不打斷使用者，含冷卻保護）
   function silentRefillIfNeeded(lsKey, generator) {
-    if (window.__AI_IN_FLIGHT__) return; // AI 忙碌中就不補
+    if (window.__AI_IN_FLIGHT__) return;
+    const now = Date.now();
+    if (now - lastRefillTime < REFILL_COOLDOWN_MS) return; // 冷卻中
     const count = cacheCount(lsKey);
     if (count <= CACHE_REFILL_AT) {
+      lastRefillTime = now;
       generator(true).catch(e => console.warn("背景補貨失敗：", e));
     }
   }
@@ -1371,8 +1453,7 @@ ${grammarList.join("\n")}`,
       const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
 
       if (!cacheOk) {
-        // Cache 不足或指紋不符（新資料加入），重新批次產題
-        saveCache(LS_GRAMMAR_CACHE, fp, []); // 清掉舊 cache
+        // Cache 不足或指紋不符，重新批次產題（不預先清空，失敗時保留舊題）
         await batchGenerateGrammarQuestions(false);
       } else {
         hideLoading();
@@ -1394,44 +1475,42 @@ ${grammarList.join("\n")}`,
     }
   }
 
-async function startSpellingQuiz() {
+  async function startSpellingQuiz() {
     const n = settings.spellingN || 10;
     const wordList = pickWordListForAI(80);
     if (wordList.length < 10) { showError("單字庫太少或範圍過窄"); return; }
 
     try {
       wrongCount = 0;
-      showLoading("正在生成題目請稍後");
-      const out = await gjson(
-`你是國中英文老師。${difficultyGuide()}
-請「只使用下列單字作為答案」出 ${n} 題拼字填空。
-只回 JSON：{ "questions":[ { "prompt":"... ______ ...", "answer":"...", "zh":"整句中文翻譯" } ] }
-規則：
-- answer 必須完全等於單字清單其中之一
-- prompt 句子要自然通順，挖空用 ______，且句子中不要出現答案本身
-- zh 是整句英文句子的完整中文翻譯（包含填入答案後的完整句義）
-單字清單：
-${wordList.join(", ")}`, "請開始出題。"
-      );
 
-      const raw = (out.questions || []).slice(0, n);
-      const qs = raw.map((x, i) => {
-        const ans = (x.answer || "").trim();
-        let prompt = x.prompt || `拼字題 ${i + 1}`;
-        if (prompt.includes("______") && ans) {
-          const first = ans[0], last = ans[ans.length - 1];
-          const hint = spellingHint(ans);
-          const seg = new RegExp(first + "\\s*______\\s*" + last);
-          if (seg.test(prompt)) prompt = prompt.replace(seg, hint);
-          else prompt = prompt.replace("______", hint);
-        }
-        return { kind: "text", prompt, answer: ans, zh: (x.zh || "").trim() };
-      });
+      const fp = computeSpellingFingerprint();
+      const cache = loadCache(LS_SPELLING_CACHE);
+      const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
+
+      if (!cacheOk) {
+        await batchGenerateSpellingQuestions(false);
+      }
+
+      // 從 spelling cache 抽題
+      const sc = loadCache(LS_SPELLING_CACHE);
+      const qs = sc.questions.splice(0, n);
+      saveCache(LS_SPELLING_CACHE, sc.fingerprint, sc.questions);
+
+      if (!qs.length) throw new Error("題庫產生失敗，請再試一次");
 
       hideLoading();
       quiz = { type: "spelling", meta: "拼字填空", idx: 0, score: 0, questions: qs };
       showOnly("viewQuiz");
       renderQ();
+
+      // 背景補貨（拼字用獨立冷卻）
+      setTimeout(() => {
+        if (window.__AI_IN_FLIGHT__) return;
+        if (loadCache(LS_SPELLING_CACHE).questions.length <= CACHE_REFILL_AT) {
+          batchGenerateSpellingQuestions(true).catch(e => console.warn("拼字背景補貨失敗：", e));
+        }
+      }, 2000);
+
     } catch (e) {
       hideLoading();
       showError("拼字填空出題失敗：" + (e.message || String(e)));
@@ -1454,7 +1533,6 @@ ${wordList.join(", ")}`, "請開始出題。"
       const cacheOk = cache.fingerprint === fp && cache.questions.length >= n;
 
       if (!cacheOk) {
-        saveCache(LS_MISTAKE_CACHE, fp, []);
         await batchGenerateMistakeQuestions(false);
       } else {
         hideLoading();
@@ -1611,6 +1689,42 @@ ${grammarList}`, "請開始出題。"
     if (!list) return;
     list.innerHTML = "";
 
+    // ── 快速選冊按鈕（依資料動態產生有哪些冊）──
+    const books = Array.from(new Set(scopeKeys.map(it => it.book))).filter(Boolean);
+    if (books.length) {
+      const quickRow = document.createElement("div");
+      quickRow.className = "row";
+      quickRow.style.cssText = "margin-bottom:10px;flex-wrap:wrap;gap:8px;";
+
+      const quickLabel = document.createElement("span");
+      quickLabel.className = "small";
+      quickLabel.textContent = "快速選：";
+      quickRow.appendChild(quickLabel);
+
+      for (const book of books) {
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.style.cssText = "padding:6px 12px;font-size:13px;border-radius:999px;";
+        btn.textContent = book;
+        btn.onclick = () => {
+          // 先全部取消，再勾選該冊
+          for (const it of scopeKeys) settings.scope[it.key] = false;
+          for (const it of scopeKeys) {
+            if (it.book === book) settings.scope[it.key] = true;
+          }
+          renderScopeUI(scopeKeys);
+        };
+        quickRow.appendChild(btn);
+      }
+      list.appendChild(quickRow);
+
+      const divider = document.createElement("div");
+      divider.className = "divider";
+      divider.style.margin = "0 0 10px";
+      list.appendChild(divider);
+    }
+
+    // ── 個別單元 checkbox ──
     for (const it of scopeKeys) {
       const id = "sc_" + it.key.replace(/\s+/g, "_");
       const wrap = document.createElement("label");
@@ -1665,10 +1779,11 @@ ${grammarList}`, "請開始出題。"
     if ($("#setClozeQn")) settings.clozeQn = parseInt($("#setClozeQn").value, 10);
     if ($("#setDifficulty")) settings.difficulty = $("#setDifficulty").value;
 
-    // 難度改變 → 清掉文法與改錯 cache，下次開測驗自動重產
+    // 難度改變 → 清掉文法、改錯、拼字 cache
     if (settings.difficulty !== oldDifficulty) {
       try { localStorage.removeItem(LS_GRAMMAR_CACHE); } catch(e) {}
       try { localStorage.removeItem(LS_MISTAKE_CACHE); } catch(e) {}
+      try { localStorage.removeItem(LS_SPELLING_CACHE); } catch(e) {}
     }
 
     saveJson(LS_SETTINGS, settings);
