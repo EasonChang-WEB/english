@@ -303,10 +303,12 @@
     return shuffle(uniq).slice(0, maxN);
   }
 
-  function pickGrammarListForAI(maxN) {
-    const pool = filterGrammarByScope();
+  // 從文法池按冊分散抽取，回傳 title-only 精簡字串（不含例句）
+  // usedTitles：本次批次已用過的文法 title，確保兩輪不重複
+  function pickGrammarListForAI(maxN, usedTitles = new Set()) {
+    const pool = filterGrammarByScope().filter(g => !usedTitles.has(g.title));
 
-    // 按 book+unit 分組，每組隨機取 1~2 條，確保跨冊分散
+    // 按 book+unit 分組，每組隨機取一條，確保跨冊分散
     const byUnit = new Map();
     for (const g of pool) {
       const key = scopeKeyOf(g.book, g.unit);
@@ -317,25 +319,22 @@
     const units = shuffle(Array.from(byUnit.keys()));
     const picked = [];
 
-    // 每個 unit 輪流取一條，直到達到 maxN
-    let round = 0;
-    while (picked.length < maxN && round < 10) {
+    for (const unit of units) {
+      if (picked.length >= maxN) break;
+      const gs = byUnit.get(unit);
+      picked.push(gs[Math.floor(Math.random() * gs.length)]);
+    }
+
+    // 不足時補充（同 unit 第二條）
+    if (picked.length < maxN) {
       for (const unit of units) {
         if (picked.length >= maxN) break;
         const gs = byUnit.get(unit);
-        const idx = Math.floor(Math.random() * gs.length);
-        picked.push(gs[idx]);
+        if (gs.length > 1) picked.push(gs[Math.floor(Math.random() * gs.length)]);
       }
-      round++;
     }
 
-    return picked.map(g => {
-      const title = String(g.title || "").trim();
-      if (!title) return "";
-      const ex = Array.isArray(g.examples) ? g.examples.slice(0, 1).join(" / ") : "";
-      const head = scopeKeyOf(g.book, g.unit);
-      return `${head}｜${title}${ex ? `｜例：${ex}` : ""}`.trim();
-    }).filter(Boolean);
+    return picked.map(g => `${scopeKeyOf(g.book, g.unit)}｜${g.title}`).filter(Boolean);
   }
 
   // ====== Normalize options ======
@@ -1051,25 +1050,29 @@ function templateTagOf(g) {
   async function batchGenerateGrammarQuestions(silent = false) {
     if (!silent) showLoading("正在預備文法題庫，首次需要稍等…");
 
-    const totalN = CACHE_BATCH_SIZE; // 20 題
-    const batchN = 5;                // 每次只出 5 題，共 4 次
-    const rules = difficultyPromptRules("grammar");
-    const fp = computeGrammarFingerprint();
+    const batchN = 10;   // 每輪出 10 題
+    const rounds = 2;    // 共 2 輪，合計 20 題
+    const grammarPerRound = 6; // 每輪 6 條文法，足夠交叉又不過多
     const allQs = [];
+    const usedTitles = new Set(); // 追蹤已用文法，確保兩輪不重複
 
-    for (let round = 0; round < totalN / batchN; round++) {
-      const grammarList = pickGrammarListForAI(12);
+    for (let round = 0; round < rounds; round++) {
+      const grammarList = pickGrammarListForAI(grammarPerRound, usedTitles);
+      // 記錄本輪用過的文法 title
+      grammarList.forEach(s => usedTitles.add(s.split("｜")[1] || s));
 
       try {
+        const d = getDifficulty() === "挑戰"
+          ? "挑戰難度（國八後段～國九）：每題交叉考 2～3 個文法點，干擾選項需具混淆性"
+          : "標準難度（國八）：每題交叉考 2 個文法點，選項自然通順";
+
         const out = await gjson(
-`你是國中英文文法出題老師。${difficultyGuide()}
-請出 ${batchN} 題四選一文法選擇題，每題交叉考察 2 個不同文法點。
-${rules}
-只回 JSON：{"questions":[{"prompt":"句子 ______","options":["A","B","C","D"],"answer":"正確選項","grammarLabel":"考點"}]}
-規則：prompt 用 ______，options 4 個，answer 等於 options 其中之一，干擾選項具混淆性。
-文法清單：
+`國中英文文法出題，${d}。
+出 ${batchN} 題四選一，只從以下 ${grammarPerRound} 個文法點交叉組合出題，禁止只考單一文法點。
+JSON格式：{"questions":[{"prompt":"句子______","options":["","","",""],"answer":"","grammarLabel":"點A+點B"}]}
+文法點：
 ${grammarList.join("\n")}`,
-          "請開始出題。"
+          "出題。"
         );
 
         const raw = (out.questions || []).slice(0, batchN);
@@ -1080,16 +1083,15 @@ ${grammarList.join("\n")}`,
 
         allQs.push(...qs);
       } catch (e) {
-        console.warn(`文法第 ${round + 1} 批失敗，略過：`, e.message);
+        console.warn(`文法第 ${round + 1} 輪失敗：`, e.message);
       }
 
-      // 批次間隔 5 秒，避免觸發限流
-      if (round < totalN / batchN - 1) {
-        await new Promise(res => setTimeout(res, 5000));
+      // 兩輪之間等 4 秒
+      if (round < rounds - 1) {
+        await new Promise(res => setTimeout(res, 4000));
       }
     }
 
-    // 只有產到題目才存入 cache，不清空舊的
     if (allQs.length) {
       appendToCache(LS_GRAMMAR_CACHE, allQs);
     }
@@ -1102,24 +1104,29 @@ ${grammarList.join("\n")}`,
   async function batchGenerateMistakeQuestions(silent = false) {
     if (!silent) showLoading("正在預備改錯題庫，首次需要稍後…");
 
-    const totalN = CACHE_BATCH_SIZE;
-    const batchN = 5;
-    const rules = difficultyPromptRules("mistake");
+    const batchN = 10;
+    const rounds = 2;
+    const grammarPerRound = 6;
     const allQs = [];
+    const usedTitles = new Set();
 
-    for (let round = 0; round < totalN / batchN; round++) {
-      const grammarList = pickGrammarListForAI(12);
+    for (let round = 0; round < rounds; round++) {
+      const grammarList = pickGrammarListForAI(grammarPerRound, usedTitles);
+      grammarList.forEach(s => usedTitles.add(s.split("｜")[1] || s));
 
       try {
+        const d = getDifficulty() === "挑戰"
+          ? "挑戰難度：句子自然，錯誤不明顯，涵蓋多種文法錯誤類型"
+          : "標準難度：句子自然，一個明確文法錯誤";
+
         const out = await gjson(
-`你是國中英文文法出題老師。${difficultyGuide()}
-請出 ${batchN} 題選出錯誤題，每題含一個文法錯誤，學生選出哪個詞組有錯。
-${rules}
-只回 JSON：{"questions":[{"wrongSentence":"句子","parts":["詞組A","詞組B","詞組C","詞組D"],"wrongIndex":0,"correction":"說明","grammarLabel":"考點"}]}
-規則：parts 4 個詞組，wrongIndex 是有錯的索引，每題只有一個錯，禁止重複 When school will be over 句子。
-文法清單：
+`國中英文改錯出題，${d}。
+出 ${batchN} 題，每題一個含文法錯誤的句子，切成4個詞組讓學生選出有錯的那個。
+禁止重複「When school will be over」句型。
+JSON格式：{"questions":[{"wrongSentence":"句子","parts":["A","B","C","D"],"wrongIndex":0,"correction":"說明","grammarLabel":"考點"}]}
+文法點：
 ${grammarList.join("\n")}`,
-          "請開始出題。"
+          "出題。"
         );
 
         const raw = (out.questions || []).slice(0, batchN);
@@ -1132,11 +1139,11 @@ ${grammarList.join("\n")}`,
 
         allQs.push(...qs);
       } catch (e) {
-        console.warn(`改錯第 ${round + 1} 批失敗，略過：`, e.message);
+        console.warn(`改錯第 ${round + 1} 輪失敗：`, e.message);
       }
 
-      if (round < totalN / batchN - 1) {
-        await new Promise(res => setTimeout(res, 5000));
+      if (round < rounds - 1) {
+        await new Promise(res => setTimeout(res, 4000));
       }
     }
 
@@ -1161,23 +1168,23 @@ ${grammarList.join("\n")}`,
     if (pool.length < 10) return [];
     if (!silent) showLoading("正在預備拼字題庫，首次需要稍等…");
 
-    const totalN = CACHE_BATCH_SIZE;
-    const batchN = 5;
+    const batchN = 10;
+    const rounds = 2;
     const fp = computeSpellingFingerprint();
     const allQs = [];
+    const usedWords = new Set();
 
-    for (let round = 0; round < totalN / batchN; round++) {
-      // 每批只給 20 個單字，prompt 輕量
-      const wordList = pickWordListForAI(20);
+    for (let round = 0; round < rounds; round++) {
+      // 每輪抽 15 個不重複單字
+      const wordList = pickWordListForAI(30).filter(w => !usedWords.has(w)).slice(0, 15);
+      wordList.forEach(w => usedWords.add(w));
 
       try {
         const out = await gjson(
-`你是國中英文老師。${difficultyGuide()}
-只使用下列單字作為答案，出 ${batchN} 題拼字填空。
-只回 JSON：{"questions":[{"prompt":"句子 ______","answer":"單字","zh":"整句中文翻譯"}]}
-規則：answer 等於清單其中一字，prompt 自然通順不含答案本身，zh 為完整句義翻譯。
+`國中英文拼字填空，出 ${batchN} 題，只用以下單字當答案。
+JSON格式：{"questions":[{"prompt":"句子______","answer":"單字","zh":"中文翻譯"}]}
 單字：${wordList.join(", ")}`,
-          "請開始出題。"
+          "出題。"
         );
 
         const raw = (out.questions || []).slice(0, batchN);
@@ -1196,11 +1203,11 @@ ${grammarList.join("\n")}`,
 
         allQs.push(...qs);
       } catch (e) {
-        console.warn(`拼字第 ${round + 1} 批失敗，略過：`, e.message);
+        console.warn(`拼字第 ${round + 1} 輪失敗：`, e.message);
       }
 
-      if (round < totalN / batchN - 1) {
-        await new Promise(res => setTimeout(res, 5000));
+      if (round < rounds - 1) {
+        await new Promise(res => setTimeout(res, 4000));
       }
     }
 
