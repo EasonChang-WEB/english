@@ -41,18 +41,20 @@
   function badge(ok, text) {
     const b = $("#apiBadge");
     if (!b) return;
-    const dot = b.querySelector(".dot");
-    const label = b.querySelector("span:last-child");
+    // Support both old (.dot) and new (.status-dot) HTML structures
+    const dot = b.querySelector(".status-dot") || b.querySelector(".dot");
+    const label = document.getElementById("statusText") || b.querySelector("span:last-child");
     if (label) label.textContent = text || (ok ? "AI：已連線" : "AI：尚未連線");
     if (dot) {
-      if (ok === "bg") dot.style.background = "#d97706"; // 橘色：背景備題中
-      else if (ok) dot.style.background = "var(--good)"; // 綠色：已連線
-      else dot.style.background = "var(--accent)";       // 預設色：未連線/錯誤
+      if (ok === "bg") { dot.style.background = "#f59e0b"; dot.style.boxShadow = "0 0 6px #f59e0b"; }
+      else if (ok)     { dot.style.background = "var(--good)"; dot.style.boxShadow = "0 0 6px var(--good)"; }
+      else             { dot.style.background = "var(--fire,#f4622a)"; dot.style.boxShadow = "0 0 6px var(--fire,#f4622a)"; }
     }
   }
 
   function showOnly(id) {
-    const views = ["viewVocab", "viewGrammar", "viewAiQuiz", "viewStats", "viewSettings", "viewQuiz", "viewResult", "viewError"];
+    const views = ["viewVocab", "viewGrammar", "viewAiQuiz", "viewStats", "viewSettings", "viewQuiz", "viewResult", "viewError",
+                   "viewReading", "viewReadingQuiz", "viewReadingResult"];
     for (const vid of views) {
       const el = document.getElementById(vid);
       if (!el) continue;
@@ -273,11 +275,16 @@
   }
 
   function ensureScopeDefaults(scopeKeys) {
-    const hasAny = Object.keys(settings.scope || {}).length > 0;
-    if (hasAny) return;
-    settings.scope = {};
-    for (const it of scopeKeys) settings.scope[it.key] = true;
-    saveJson(LS_SETTINGS, settings);
+    if (!settings.scope) settings.scope = {};
+    let changed = false;
+    for (const it of scopeKeys) {
+      // Only add keys that are genuinely missing (undefined), never overwrite explicit false
+      if (settings.scope[it.key] === undefined) {
+        settings.scope[it.key] = true;
+        changed = true;
+      }
+    }
+    if (changed) saveJson(LS_SETTINGS, settings);
   }
 
   function selectedScopeSet() {
@@ -1325,10 +1332,11 @@ JSON格式：{"questions":[{"prompt":"句子______","answer":"單字","zh":"中�
       const box = $("#options");
       if (!box) return;
       box.innerHTML = "";
-      for (const ch of cur.choices) {
+      const letters = ["A", "B", "C", "D"];
+      for (const [i, ch] of cur.choices.entries()) {
         const b = document.createElement("button");
         b.className = "opt";
-        b.textContent = ch;
+        b.innerHTML = `<span class="opt-letter">${letters[i]}.</span><span>${escapeHtml(ch)}</span>`;
         b.onclick = () => {
           $$(".opt").forEach(x => x.disabled = true);
           const ok = (ch === cur.wrong);
@@ -1374,10 +1382,11 @@ JSON格式：{"questions":[{"prompt":"句子______","answer":"單字","zh":"中�
     const box = $("#options");
     if (!box) return;
     box.innerHTML = "";
-    for (const opt of (cur.options || [])) {
+    const letters = ["A", "B", "C", "D"];
+    for (const [i, opt] of (cur.options || []).entries()) {
       const b = document.createElement("button");
       b.className = "opt";
-      b.textContent = opt;
+      b.innerHTML = `<span class="opt-letter">${letters[i] || (i+1)}.</span><span>${escapeHtml(opt)}</span>`;
       b.onclick = () => {
         $$(".opt").forEach(x => x.disabled = true);
         const ok = (opt === cur.answer);
@@ -1700,6 +1709,7 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
 
   // ====== Settings UI (dynamic scan) ======
   function ensureDifficultyUI() {
+    // If the HTML already has a #setDifficulty element (new design), do nothing
     if ($("#setDifficulty")) return;
     const saveBtn = $("#btnSaveSettings");
     if (!saveBtn) return;
@@ -1850,27 +1860,109 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
     sel.value = current;
   }
 
+  // ── Vocab / Grammar filter state ──
+  const vocabFilter = { book: "", unit: "", page: 0 };
+  const grammarFilter = { book: "", unit: "" };
+  const VOCAB_PAGE_SIZE = 60;
+
+  function getBooks(arr) {
+    const order = ["國七上","國七下","國八上","國八下","國九上","國九下"];
+    const set = new Set(arr.map(v => v.book).filter(Boolean));
+    return order.filter(b => set.has(b));
+  }
+  function getUnits(arr, book) {
+    const pool = book ? arr.filter(v => v.book === book) : arr;
+    const units = Array.from(new Set(pool.map(v => v.unit).filter(Boolean)));
+    const unitNum = u => /starter/i.test(u) ? 0 : parseInt(u.replace(/\D+/g,"") || "999", 10);
+    return units.sort((a,b) => unitNum(a) - unitNum(b));
+  }
+
+  function renderFilterTabs(containerId, items, filter, onChange) {
+    const c = document.getElementById(containerId);
+    if (!c) return;
+    c.innerHTML = "";
+
+    const books = getBooks(items);
+    const units = getUnits(items, filter.book);
+
+    // Book tabs
+    const bookRow = document.createElement("div");
+    bookRow.className = "filter-tab-row";
+    [{ val:"", label:"全部" }, ...books.map(b=>({val:b,label:b}))].forEach(({val,label}) => {
+      const btn = document.createElement("button");
+      btn.className = "filter-tab" + (filter.book === val ? " active" : "");
+      btn.textContent = label;
+      btn.onclick = () => { filter.book = val; filter.unit = ""; filter.page = 0; onChange(); };
+      bookRow.appendChild(btn);
+    });
+    c.appendChild(bookRow);
+
+    // Unit tabs
+    const unitRow = document.createElement("div");
+    unitRow.className = "filter-tab-row";
+    [{ val:"", label:"全章節" }, ...units.map(u=>({val:u,label:u}))].forEach(({val,label}) => {
+      const btn = document.createElement("button");
+      btn.className = "filter-tab small-tab" + (filter.unit === val ? " active" : "");
+      btn.textContent = label;
+      btn.onclick = () => { filter.unit = val; filter.page = 0; onChange(); };
+      unitRow.appendChild(btn);
+    });
+    c.appendChild(unitRow);
+  }
+
   function renderVocab() {
-    fillUnitSelect("vocabFilterUnit", data.vocab.map(v => scopeKeyOf(v.book, v.unit)));
-    const uf = $("#vocabFilterUnit") ? $("#vocabFilterUnit").value : "";
-    const q = ($("#vocabSearch") ? $("#vocabSearch").value : "").trim().toLowerCase();
-    const box = $("#vocabList"); if (!box) return;
+    const tabsEl = document.getElementById("vocabTabs");
+    const box = document.getElementById("vocabList");
+    if (!box) return;
+
+    renderFilterTabs("vocabTabs", data.vocab, vocabFilter, renderVocab);
+
+    const filtered = data.vocab.filter(v => {
+      if (vocabFilter.book && v.book !== vocabFilter.book) return false;
+      if (vocabFilter.unit && v.unit !== vocabFilter.unit) return false;
+      return true;
+    });
+
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / VOCAB_PAGE_SIZE);
+    const page = Math.min(vocabFilter.page || 0, Math.max(0, totalPages - 1));
+    const items = filtered.slice(page * VOCAB_PAGE_SIZE, (page + 1) * VOCAB_PAGE_SIZE);
+
     box.innerHTML = "";
 
-    const items = data.vocab.filter(v => {
-      const u = scopeKeyOf(v.book, v.unit);
-      if (uf && u !== uf) return false;
-      if (!q) return true;
-      return (v.word || "").toLowerCase().includes(q) || (v.def || "").toLowerCase().includes(q);
-    }).slice(0, 250);
-
+    // Grid container
+    const grid = document.createElement("div");
+    grid.className = "vocab-grid";
     for (const v of items) {
-      const div = document.createElement("div");
-      div.className = "item";
-      div.innerHTML =
-        `<div class="t"><b>${escapeHtml(v.word)} <span style="font-weight:400;color:var(--muted);margin-left:10px">${escapeHtml(v.def || "")}</span></b>` +
-        `<span>${escapeHtml(scopeKeyOf(v.book, v.unit))}</span></div>`;
-      box.appendChild(div);
+      const card = document.createElement("div");
+      card.className = "vocab-card";
+      card.innerHTML =
+        `<span class="vc-word">${escapeHtml(v.word)}</span>` +
+        `<span class="vc-type">${escapeHtml(v.type||"")}</span>` +
+        `<span class="vc-def">${escapeHtml(v.def||"")}</span>` +
+        `<span class="vc-unit">${escapeHtml((v.book||"")+" "+(v.unit||""))}</span>`;
+      grid.appendChild(card);
+    }
+    box.appendChild(grid);
+
+    // Pagination
+    if (totalPages > 1) {
+      const pg = document.createElement("div");
+      pg.className = "pagination";
+      pg.innerHTML = `<span class="pg-info">第 ${page+1} / ${totalPages} 頁（共 ${total} 個單字）</span>`;
+      if (page > 0) {
+        const prev = document.createElement("button");
+        prev.className = "btn"; prev.textContent = "← 上一頁";
+        prev.onclick = () => { vocabFilter.page = page - 1; renderVocab(); };
+        pg.prepend(prev);
+      }
+      if (page < totalPages - 1) {
+        const next = document.createElement("button");
+        next.className = "btn"; next.textContent = "下一頁 →";
+        next.onclick = () => { vocabFilter.page = page + 1; renderVocab(); };
+        pg.appendChild(next);
+      }
+      box.appendChild(pg);
     }
   }
 
@@ -1883,30 +1975,51 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
   }
 
   function renderGrammar() {
-    fillUnitSelect("grammarFilterUnit", data.grammar.map(g => scopeKeyOf(g.book, g.unit)));
-    const uf = $("#grammarFilterUnit") ? $("#grammarFilterUnit").value : "";
-    const q = ($("#grammarSearch") ? $("#grammarSearch").value : "").trim().toLowerCase();
-    const box = $("#grammarList"); if (!box) return;
-    box.innerHTML = "";
+    const box = document.getElementById("grammarList");
+    if (!box) return;
+
+    renderFilterTabs("grammarTabs", data.grammar, grammarFilter, renderGrammar);
 
     const items = data.grammar.filter(g => {
-      const u = scopeKeyOf(g.book, g.unit);
-      if (uf && u !== uf) return false;
-      if (!q) return true;
-      const hay = [g.title || "", g.group || "", g.pattern || "", g.explanation || "", ...(Array.isArray(g.examples) ? g.examples : [])].join(" ").toLowerCase();
-      return hay.includes(q);
-    }).sort(compareBookUnitTitle).slice(0, 250);
+      if (grammarFilter.book && g.book !== grammarFilter.book) return false;
+      if (grammarFilter.unit && g.unit !== grammarFilter.unit) return false;
+      return true;
+    }).sort(compareBookUnitTitle);
 
+    box.innerHTML = "";
+
+    if (!items.length) {
+      box.innerHTML = '<div class="list-small" style="color:var(--muted);padding:12px 0">此範圍無文法資料</div>';
+      return;
+    }
+
+    // Group by unit
+    const byUnit = new Map();
     for (const g of items) {
-      const div = document.createElement("div");
-      div.className = "item";
-      const groupHtml = g.group ? `<span class="chip">${escapeHtml(g.group)}</span>` : "";
-      const patternHtml = g.pattern ? `<div class="small" style="margin-top:8px"><b>句型：</b>${escapeHtml(g.pattern)}</div>` : "";
-      const exampleText = Array.isArray(g.examples) && g.examples.length ? g.examples.slice(0, 2).join(" / ") : "";
-      const exampleHtml = exampleText ? `<div class="small" style="margin-top:6px"><b>例：</b>${escapeHtml(exampleText)}</div>` : "";
-      const explHtml = g.explanation ? `<div class="small" style="margin-top:6px">${escapeHtml(g.explanation)}</div>` : "";
-      div.innerHTML = `<div class="t"><b>${escapeHtml(g.title || "")}</b><span>${escapeHtml(scopeKeyOf(g.book, g.unit))}</span></div><div style="margin-top:8px">${groupHtml}</div>${patternHtml}${exampleHtml}${explHtml}`;
-      box.appendChild(div);
+      const key = (g.book||"") + " " + (g.unit||"");
+      if (!byUnit.has(key)) byUnit.set(key, []);
+      byUnit.get(key).push(g);
+    }
+
+    for (const [unitKey, gs] of byUnit) {
+      const section = document.createElement("div");
+      section.className = "grammar-section";
+      section.innerHTML = `<div class="grammar-section-title">${escapeHtml(unitKey)}</div>`;
+
+      for (const g of gs) {
+        const div = document.createElement("div");
+        div.className = "grammar-item";
+        const groupHtml = g.group ? `<span class="chip">${escapeHtml(g.group)}</span>` : "";
+        const patternHtml = g.pattern ? `<div class="gi-pattern">句型：${escapeHtml(g.pattern)}</div>` : "";
+        const exampleText = Array.isArray(g.examples) && g.examples.length ? g.examples.slice(0,2).join(" / ") : "";
+        const exampleHtml = exampleText ? `<div class="gi-example">例：${escapeHtml(exampleText)}</div>` : "";
+        const explHtml = g.explanation ? `<div class="gi-exp">${escapeHtml(g.explanation)}</div>` : "";
+        div.innerHTML =
+          `<div class="gi-header"><span class="gi-title">${escapeHtml(g.title||"")}</span>${groupHtml}</div>` +
+          `${patternHtml}${exampleHtml}${explHtml}`;
+        section.appendChild(div);
+      }
+      box.appendChild(section);
     }
   }
 
@@ -1914,14 +2027,41 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
   // ====== Navigation ======
   function setView(view, scopeKeys) {
     $$(".navBtn").forEach(b => b.classList.toggle("active", b.dataset.view === view));
-    const map = { vocab: "單字庫", grammar: "文法庫", aiquiz: "AI測驗庫", stats: "測驗統計", settings: "功能設定" };
+    const map = { vocab: "單字庫", grammar: "文法庫", aiquiz: "AI 測驗", reading: "課文練習", stats: "測驗統計", settings: "設定" };
     setTitle(map[view] || "");
 
-    if (view === "vocab") { showOnly("viewVocab"); renderVocab(); return; }
-    if (view === "grammar") { showOnly("viewGrammar"); renderGrammar(); return; }
-    if (view === "aiquiz") { showOnly("viewAiQuiz"); return; }
-    if (view === "stats") { showOnly("viewStats"); renderStats(); return; }
-    if (view === "settings") { showOnly("viewSettings"); syncSettingsToUI(scopeKeys); return; }
+    if (view === "vocab")    { showOnly("viewVocab");    renderVocab();                  return; }
+    if (view === "grammar")  { showOnly("viewGrammar");  renderGrammar();                return; }
+    if (view === "aiquiz")   { showOnly("viewAiQuiz");                                   return; }
+    if (view === "stats")    { showOnly("viewStats");    renderStats();                  return; }
+    if (view === "settings") { showOnly("viewSettings"); syncSettingsToUI(scopeKeys);    return; }
+    if (view === "reading")  { showOnly("viewReading");  renderPassageListFromScript();  return; }
+  }
+
+  function renderPassageListFromScript() {
+    const list = document.getElementById("passageList");
+    if (!list) return;
+    list.innerHTML = "";
+    const passages = window.readingPassages || [];
+    if (!passages.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:14px">尚無課文資料</div>';
+      return;
+    }
+    passages.forEach((p, i) => {
+      const item = document.createElement("div");
+      item.className = "passage-item";
+      const typeChip = p.type === "dialogue"
+        ? '<span class="chip fire">對話</span>'
+        : '<span class="chip ice">閱讀</span>';
+      item.innerHTML =
+        '<div class="pi-left">' +
+          `<div class="pi-title">${escapeHtml(p.title)}</div>` +
+          `<div class="pi-meta">${escapeHtml(p.book + ' · ' + p.unit)} &nbsp;${typeChip}</div>` +
+        '</div>' +
+        '<span class="pi-arrow">›</span>';
+      item.addEventListener("click", () => startStaticReadingQuiz(i));
+      list.appendChild(item);
+    });
   }
 
   // ====== Wire ======
@@ -1929,11 +2069,7 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
     // left nav
     $$(".navBtn").forEach(b => b.addEventListener("click", () => setView(b.dataset.view, scopeKeys)));
 
-    // list search/filter
-    $("#vocabSearch") && $("#vocabSearch").addEventListener("input", renderVocab);
-    $("#vocabFilterUnit") && $("#vocabFilterUnit").addEventListener("change", renderVocab);
-    $("#grammarSearch") && $("#grammarSearch").addEventListener("input", renderGrammar);
-    $("#grammarFilterUnit") && $("#grammarFilterUnit").addEventListener("change", renderGrammar);
+    // list search/filter - tabs are rendered directly in renderVocab/renderGrammar
 
     // stats range
     $("#statRange") && $("#statRange").addEventListener("change", renderStats);
@@ -1941,13 +2077,17 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
     // settings save
     $("#btnSaveSettings") && ($("#btnSaveSettings").onclick = () => { saveSettingsFromUI(); alert("設定已儲存"); });
 
-    // quiz buttons
-    $("#startVocabQuiz") && ($("#startVocabQuiz").onclick = startVocabQuiz);
-    $("#startGrammarQuiz") && ($("#startGrammarQuiz").onclick = startGrammarQuiz);
-    $("#startReadingQuiz") && ($("#startReadingQuiz").onclick = startReadingQuiz);
-    $("#startSpellingQuiz") && ($("#startSpellingQuiz").onclick = startSpellingQuiz);
-    $("#startFindMistakeQuiz") && ($("#startFindMistakeQuiz").onclick = startFindMistakeQuiz);
-    $("#startClozeQuiz") && ($("#startClozeQuiz").onclick = startClozeQuiz);
+    // quiz buttons — support both <button> and <div> (new card design)
+    const bindQuiz = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("click", fn);
+    };
+    bindQuiz("startVocabQuiz",       startVocabQuiz);
+    bindQuiz("startGrammarQuiz",     startGrammarQuiz);
+    bindQuiz("startReadingQuiz",     startReadingQuiz);
+    bindQuiz("startSpellingQuiz",    startSpellingQuiz);
+    bindQuiz("startFindMistakeQuiz", startFindMistakeQuiz);
+    bindQuiz("startClozeQuiz",       startClozeQuiz);
 
     // quiz controls
     $("#btnAcknowledge") && ($("#btnAcknowledge").onclick = nextQ);
@@ -1955,7 +2095,116 @@ answer 等於 options 其中之一，空格考點分散（介系詞/時態/連�
     $("#btnExplainOk") && ($("#btnExplainOk").onclick = closeExplain);
 
     $("#btnResultRetry") && ($("#btnResultRetry").onclick = () => setView("aiquiz", scopeKeys));
-    $("#btnErrClose") && ($("#btnErrClose").onclick = () => setView("aiquiz", scopeKeys));
+    $("#btnErrClose")    && ($("#btnErrClose").onclick    = () => setView("aiquiz", scopeKeys));
+
+    // static reading quiz controls
+    $("#btnBackToReading") && ($("#btnBackToReading").onclick = () => setView("reading", scopeKeys));
+    $("#rqBtnNext")        && ($("#rqBtnNext").onclick        = nextStaticQ);
+    $("#rqBtnExplain")     && ($("#rqBtnExplain").onclick     = explainStaticQ);
+    $("#rqRetry")          && ($("#rqRetry").onclick          = retryStaticQuiz);
+    $("#rqBackList")       && ($("#rqBackList").onclick       = () => setView("reading", scopeKeys));
+  }
+
+  // ====== Static Reading Quiz (課文練習) ======
+  const staticRQ = { passage: null, idx: 0, score: 0, correct: 0 };
+
+  function startStaticReadingQuiz(pi) {
+    const p = (window.readingPassages || [])[pi];
+    if (!p) return;
+    staticRQ.passage = p;
+    staticRQ.idx = 0;
+    staticRQ.score = 0;
+    staticRQ.correct = 0;
+    showOnly("viewReadingQuiz");
+    const rp = document.getElementById("rqPassage");
+    if (rp) rp.textContent = p.text;
+    renderStaticQ();
+  }
+
+  function renderStaticQ() {
+    const p = staticRQ.passage;
+    const qi = staticRQ.idx;
+    const q = p.questions[qi];
+    const total = p.questions.length;
+
+    const meta = document.getElementById("rqMeta");
+    if (meta) meta.textContent = `${qi + 1} / ${total}`;
+    const bar = document.getElementById("rqBar");
+    if (bar) bar.style.width = Math.round(qi / total * 100) + "%";
+    const scoreEl = document.getElementById("rqScore");
+    if (scoreEl) scoreEl.textContent = staticRQ.score;
+
+    const title = document.getElementById("rqTitle");
+    if (title) title.textContent = `Q${qi + 1}. ${q.q}`;
+
+    const fb = document.getElementById("rqFeedback");
+    if (fb) { fb.className = "feedback hidden"; fb.textContent = ""; }
+    const ack = document.getElementById("rqAckRow");
+    if (ack) ack.classList.add("hidden");
+
+    const optBox = document.getElementById("rqOptions");
+    if (!optBox) return;
+    optBox.innerHTML = "";
+    const letters = ["A", "B", "C", "D"];
+    q.opts.forEach((opt, i) => {
+      const btn = document.createElement("button");
+      btn.className = "opt";
+      btn.innerHTML = `<span class="opt-letter">${letters[i]}.</span><span>${escapeHtml(opt)}</span>`;
+      btn.addEventListener("click", () => answerStaticQ(i, btn, q));
+      optBox.appendChild(btn);
+    });
+  }
+
+  function answerStaticQ(chosen, btn, q) {
+    document.querySelectorAll("#rqOptions .opt").forEach(b => { b.style.pointerEvents = "none"; });
+    const correct = (chosen === q.ans);
+    if (correct) {
+      btn.classList.add("correct");
+      staticRQ.score += 10;
+      staticRQ.correct++;
+    } else {
+      btn.classList.add("wrong");
+      const all = document.querySelectorAll("#rqOptions .opt");
+      if (all[q.ans]) all[q.ans].classList.add("correct");
+    }
+    const scoreEl = document.getElementById("rqScore");
+    if (scoreEl) scoreEl.textContent = staticRQ.score;
+    const fb = document.getElementById("rqFeedback");
+    if (fb) {
+      fb.className = "feedback " + (correct ? "good" : "bad");
+      fb.textContent = (correct ? "✓ 答對！" : "✗ 答錯。") + (q.exp ? "  " + q.exp : "");
+    }
+    const ack = document.getElementById("rqAckRow");
+    if (ack) ack.classList.remove("hidden");
+  }
+
+  function nextStaticQ() {
+    const p = staticRQ.passage;
+    staticRQ.idx++;
+    if (staticRQ.idx >= p.questions.length) {
+      showOnly("viewReadingResult");
+      const score = staticRQ.score;
+      const total = p.questions.length * 10;
+      const pct = Math.round(score / total * 100);
+      const scoreEl = document.getElementById("rqFinalScore");
+      if (scoreEl) { scoreEl.textContent = score; scoreEl.classList.toggle("good-score", pct >= 70); }
+      const note = document.getElementById("rqFinalNote");
+      if (note) note.textContent = `答對 ${staticRQ.correct} / ${p.questions.length} 題（${pct}%）`;
+    } else {
+      renderStaticQ();
+    }
+  }
+
+  function explainStaticQ() {
+    const p = staticRQ.passage;
+    const q = p.questions[staticRQ.idx];
+    openExplain([q.exp || "本題無額外解釋。"]);
+  }
+
+  function retryStaticQuiz() {
+    const p = staticRQ.passage;
+    const pi = (window.readingPassages || []).indexOf(p);
+    if (pi >= 0) startStaticReadingQuiz(pi);
   }
 
   // ====== Boot (no top-level await!) ======
