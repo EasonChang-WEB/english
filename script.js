@@ -1062,15 +1062,15 @@ function templateTagOf(g) {
     if (!silent) showLoading("正在預備文法題庫，首次需要稍等…");
     if (silent) badge("bg", "AI：背景備題中…");
 
-    const batchN = 10;   // 每輪出 10 題
-    const rounds = 2;    // 共 2 輪，合計 20 題
-    const grammarPerRound = 6; // 每輪 6 條文法，足夠交叉又不過多
+    const batchN = 10;
+    const rounds = 2;
+    const grammarPerRound = 6;
     const allQs = [];
-    const usedTitles = new Set(); // 追蹤已用文法，確保兩輪不重複
+    const usedTitles = new Set();
+    let lastRoundError = null;
 
     for (let round = 0; round < rounds; round++) {
       const grammarList = pickGrammarListForAI(grammarPerRound, usedTitles);
-      // 記錄本輪用過的文法 title
       grammarList.forEach(s => usedTitles.add(s.split("｜")[1] || s));
 
       try {
@@ -1094,12 +1094,13 @@ ${grammarList.join("\n")}`,
         }).filter(q => q.options.length === 4 && q.answer);
 
         allQs.push(...qs);
+        lastRoundError = null;
       } catch (e) {
         console.warn(`文法第 ${round + 1} 輪失敗：`, e.message);
+        lastRoundError = e.message || String(e);
       }
 
-      // 兩輪之間等 4 秒
-      if (round < rounds - 1) {
+      if (round < rounds - 1 && allQs.length === 0) {
         await new Promise(res => setTimeout(res, 4000));
       }
     }
@@ -1110,6 +1111,12 @@ ${grammarList.join("\n")}`,
 
     if (!silent) hideLoading();
     else badge(true, "AI：已連線");
+
+    // 全部輪次都失敗時，throw 真正的錯誤讓上層顯示
+    if (allQs.length === 0 && lastRoundError) {
+      throw new Error(lastRoundError);
+    }
+
     return allQs;
   }
 
@@ -1123,6 +1130,7 @@ ${grammarList.join("\n")}`,
     const grammarPerRound = 6;
     const allQs = [];
     const usedTitles = new Set();
+    let lastRoundError = null;
 
     for (let round = 0; round < rounds; round++) {
       const grammarList = pickGrammarListForAI(grammarPerRound, usedTitles);
@@ -1152,11 +1160,13 @@ ${grammarList.join("\n")}`,
         }).filter(Boolean);
 
         allQs.push(...qs);
+        lastRoundError = null;
       } catch (e) {
         console.warn(`改錯第 ${round + 1} 輪失敗：`, e.message);
+        lastRoundError = e.message || String(e);
       }
 
-      if (round < rounds - 1) {
+      if (round < rounds - 1 && allQs.length === 0) {
         await new Promise(res => setTimeout(res, 4000));
       }
     }
@@ -1167,6 +1177,11 @@ ${grammarList.join("\n")}`,
 
     if (!silent) hideLoading();
     else badge(true, "AI：已連線");
+
+    if (allQs.length === 0 && lastRoundError) {
+      throw new Error(lastRoundError);
+    }
+
     return allQs;
   }
 
