@@ -1059,129 +1059,82 @@ function templateTagOf(g) {
 
   // ====== AI 批次產題：文法測驗 ======
   async function batchGenerateGrammarQuestions(silent = false) {
-    if (!silent) showLoading("正在預備文法題庫，首次需要稍等…");
+    if (!silent) showLoading("正在出題請稍等…");
     if (silent) badge("bg", "AI：背景備題中…");
 
     const batchN = 10;
-    const rounds = 2;
-    const grammarPerRound = 6;
-    const allQs = [];
-    const usedTitles = new Set();
+    const grammarPerRound = 5;
     let lastRoundError = null;
+    let allQs = [];
 
-    for (let round = 0; round < rounds; round++) {
-      const grammarList = pickGrammarListForAI(grammarPerRound, usedTitles);
-      grammarList.forEach(s => usedTitles.add(s.split("｜")[1] || s));
+    // 只跑1輪，失敗後用本地備用題
+    const grammarList = pickGrammarListForAI(grammarPerRound, new Set());
 
-      try {
-        const d = getDifficulty() === "挑戰"
-          ? "挑戰難度（國八後段～國九）：每題交叉考 2～3 個文法點，干擾選項需具混淆性"
-          : "標準難度（國八）：每題交叉考 2 個文法點，選項自然通順";
-
-        const out = await gjson(
-`國中英文文法出題，${d}。
-出 ${batchN} 題四選一，只從以下 ${grammarPerRound} 個文法點交叉組合出題，禁止只考單一文法點。
-JSON格式：{"questions":[{"prompt":"句子______","options":["","","",""],"answer":"","grammarLabel":"點A+點B"}]}
-文法點：
-${grammarList.join("\n")}`,
-          "出題。"
-        );
-
-        const raw = (out.questions || []).slice(0, batchN);
-        const qs = raw.map(x => {
-          const fixed = normalizeOptions4(x.options, x.answer);
-          return { kind: "mc", prompt: x.prompt || "—", options: fixed.options, answer: fixed.answer, grammarLabel: x.grammarLabel || "" };
-        }).filter(q => q.options.length === 4 && q.answer);
-
-        allQs.push(...qs);
-        lastRoundError = null;
-      } catch (e) {
-        console.warn(`文法第 ${round + 1} 輪失敗：`, e.message);
-        lastRoundError = e.message || String(e);
-      }
-
-      if (round < rounds - 1 && allQs.length === 0) {
-        await new Promise(res => setTimeout(res, 4000));
-      }
+    try {
+      const d = getDifficulty() === "挑戰" ? "挑戰難度" : "標準難度";
+      const out = await gjson(
+`國中英文文法，${d}，出${batchN}題四選一。
+JSON：{"questions":[{"prompt":"句子______","options":["A","B","C","D"],"answer":"A","grammarLabel":"考點"}]}
+文法點：${grammarList.join("、")}`,
+        "出題。"
+      );
+      const raw = (out.questions || []).slice(0, batchN);
+      allQs = raw.map(x => {
+        const fixed = normalizeOptions4(x.options, x.answer);
+        return { kind: "mc", prompt: x.prompt || "—", options: fixed.options, answer: fixed.answer, grammarLabel: x.grammarLabel || "" };
+      }).filter(q => q.options.length === 4 && q.answer);
+    } catch (e) {
+      console.warn("文法出題失敗：", e.message);
+      lastRoundError = e.message || String(e);
     }
 
-    if (allQs.length) {
-      appendToCache(LS_GRAMMAR_CACHE, allQs);
-    }
+    if (allQs.length) appendToCache(LS_GRAMMAR_CACHE, allQs);
 
     if (!silent) hideLoading();
     else badge(true, "AI：已連線");
 
-    // 全部輪次都失敗時，throw 真正的錯誤讓上層顯示
-    if (allQs.length === 0 && lastRoundError) {
-      throw new Error(lastRoundError);
-    }
-
+    if (allQs.length === 0 && lastRoundError) throw new Error(lastRoundError);
     return allQs;
   }
 
   // ====== AI 批次產題：選出錯誤 ======
   async function batchGenerateMistakeQuestions(silent = false) {
-    if (!silent) showLoading("正在預備改錯題庫，首次需要稍後…");
+    if (!silent) showLoading("正在出題請稍等…");
     if (silent) badge("bg", "AI：背景備題中…");
 
     const batchN = 10;
-    const rounds = 2;
-    const grammarPerRound = 6;
-    const allQs = [];
-    const usedTitles = new Set();
+    const grammarPerRound = 5;
     let lastRoundError = null;
+    let allQs = [];
 
-    for (let round = 0; round < rounds; round++) {
-      const grammarList = pickGrammarListForAI(grammarPerRound, usedTitles);
-      grammarList.forEach(s => usedTitles.add(s.split("｜")[1] || s));
+    const grammarList = pickGrammarListForAI(grammarPerRound, new Set());
 
-      try {
-        const d = getDifficulty() === "挑戰"
-          ? "挑戰難度：句子自然，錯誤不明顯，涵蓋多種文法錯誤類型"
-          : "標準難度：句子自然，一個明確文法錯誤";
-
-        const out = await gjson(
-`國中英文改錯出題，${d}。
-出 ${batchN} 題，每題一個含文法錯誤的句子，切成4個詞組讓學生選出有錯的那個。
-禁止重複「When school will be over」句型。
-JSON格式：{"questions":[{"wrongSentence":"句子","parts":["A","B","C","D"],"wrongIndex":0,"correction":"說明","grammarLabel":"考點"}]}
-文法點：
-${grammarList.join("\n")}`,
-          "出題。"
-        );
-
-        const raw = (out.questions || []).slice(0, batchN);
-        const qs = raw.map(x => {
-          const parts = Array.isArray(x.parts) && x.parts.length === 4 ? x.parts : null;
-          if (!parts) return null;
-          const wi = typeof x.wrongIndex === "number" ? x.wrongIndex : 0;
-          return { kind: "mistake", prompt: x.wrongSentence || parts.join(" "), choices: parts, wrong: parts[wi], correction: x.correction || "—", grammarLabel: x.grammarLabel || "", scope: [] };
-        }).filter(Boolean);
-
-        allQs.push(...qs);
-        lastRoundError = null;
-      } catch (e) {
-        console.warn(`改錯第 ${round + 1} 輪失敗：`, e.message);
-        lastRoundError = e.message || String(e);
-      }
-
-      if (round < rounds - 1 && allQs.length === 0) {
-        await new Promise(res => setTimeout(res, 4000));
-      }
+    try {
+      const d = getDifficulty() === "挑戰" ? "挑戰難度" : "標準難度";
+      const out = await gjson(
+`國中英文改錯，${d}，出${batchN}題。每題一個含文法錯誤的句子切成4個詞組。
+JSON：{"questions":[{"wrongSentence":"句子","parts":["A","B","C","D"],"wrongIndex":0,"correction":"說明","grammarLabel":"考點"}]}
+文法點：${grammarList.join("、")}`,
+        "出題。"
+      );
+      const raw = (out.questions || []).slice(0, batchN);
+      allQs = raw.map(x => {
+        const parts = Array.isArray(x.parts) && x.parts.length === 4 ? x.parts : null;
+        if (!parts) return null;
+        const wi = typeof x.wrongIndex === "number" ? x.wrongIndex : 0;
+        return { kind: "mistake", prompt: x.wrongSentence || parts.join(" "), choices: parts, wrong: parts[wi], correction: x.correction || "—", grammarLabel: x.grammarLabel || "", scope: [] };
+      }).filter(Boolean);
+    } catch (e) {
+      console.warn("改錯出題失敗：", e.message);
+      lastRoundError = e.message || String(e);
     }
 
-    if (allQs.length) {
-      appendToCache(LS_MISTAKE_CACHE, allQs);
-    }
+    if (allQs.length) appendToCache(LS_MISTAKE_CACHE, allQs);
 
     if (!silent) hideLoading();
     else badge(true, "AI：已連線");
 
-    if (allQs.length === 0 && lastRoundError) {
-      throw new Error(lastRoundError);
-    }
-
+    if (allQs.length === 0 && lastRoundError) throw new Error(lastRoundError);
     return allQs;
   }
 
