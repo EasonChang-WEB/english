@@ -49,54 +49,115 @@
         radial-gradient(ellipse 600px 400px at 100% 80%, rgba(59,158,255,.06) 0%, transparent 60%);
     }
 
-    .wrap { max-width: 1220px; margin: 0 auto; padding: 20px 16px 60px; }
+    .wrap { max-width: 1220px; margin: 0 auto; padding: 0 0 60px; }
 
-    /* ── Header ── */
-    header {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 16px; margin-bottom: 24px; padding-bottom: 18px;
+    /* ── Top Navbar (mobile-first, sticky) ── */
+    .top-nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(13,15,20,.95); backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px; gap: 12px;
     }
-    .brand {
-      display: flex; align-items: center; gap: 14px;
-    }
+    .brand { display: flex; align-items: center; gap: 10px; }
     .brand-icon {
-      width: 42px; height: 42px; border-radius: 12px;
-      background: linear-gradient(135deg, var(--fire), var(--fire2));
-      display: flex; align-items: center; justify-content: center;
-      font-family: var(--mono); font-weight: 700; font-size: 18px; color: #fff;
-      flex-shrink: 0; box-shadow: 0 0 20px rgba(244,98,42,.35);
+      width: 36px; height: 36px; border-radius: 10px; overflow: hidden;
+      flex-shrink: 0; box-shadow: 0 0 14px rgba(244,98,42,.3);
     }
+    .brand-icon img { width: 100%; height: 100%; object-fit: cover; }
     .brand-text { display: flex; flex-direction: column; gap: 1px; }
     .brand-title {
-      font-family: var(--mono); font-size: 18px; font-weight: 700;
-      letter-spacing: -.02em; color: var(--ink);
+      font-family: var(--mono); font-size: 15px; font-weight: 700;
+      letter-spacing: -.02em; color: var(--ink); line-height: 1.2;
     }
-    .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+    .brand-sub { font-size: 10px; color: var(--muted); letter-spacing: .05em; }
+
+    .nav-right { display: flex; align-items: center; gap: 8px; }
 
     .status-badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 7px 14px; border: 1px solid var(--border2);
-      border-radius: 999px; font-size: 13px; color: var(--muted2);
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border: 1px solid var(--border2);
+      border-radius: 999px; font-size: 12px; color: var(--muted2);
       background: var(--surface); font-family: var(--mono);
     }
     .status-dot {
-      width: 8px; height: 8px; border-radius: 50%;
+      width: 7px; height: 7px; border-radius: 50%;
       background: var(--fire); flex-shrink: 0;
-      box-shadow: 0 0 6px var(--fire);
+      box-shadow: 0 0 5px var(--fire);
     }
-    .status-dot.online { background: var(--good); box-shadow: 0 0 6px var(--good); }
-    .status-dot.loading { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+
+    /* Hamburger button */
+    .hamburger {
+      width: 38px; height: 38px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border2); background: var(--surface2);
+      cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 5px;
+      flex-shrink: 0; transition: all .15s;
+    }
+    .hamburger:hover { border-color: rgba(244,98,42,.4); background: rgba(244,98,42,.08); }
+    .hamburger.open { border-color: rgba(244,98,42,.5); background: rgba(244,98,42,.12); }
+    .hb-line {
+      width: 18px; height: 2px; background: var(--muted2);
+      border-radius: 1px; transition: all .2s ease;
+    }
+    .hamburger.open .hb-line:nth-child(1) { transform: translateY(7px) rotate(45deg); background: var(--fire2); }
+    .hamburger.open .hb-line:nth-child(2) { opacity: 0; transform: scaleX(0); }
+    .hamburger.open .hb-line:nth-child(3) { transform: translateY(-7px) rotate(-45deg); background: var(--fire2); }
+
+    /* Dropdown menu */
+    .nav-dropdown {
+      position: absolute; top: calc(100% + 4px); right: 16px;
+      width: 220px; background: var(--surface);
+      border: 1px solid var(--border2); border-radius: var(--radius);
+      box-shadow: 0 16px 40px rgba(0,0,0,.5);
+      overflow: hidden; z-index: 200;
+      transform-origin: top right;
+      transition: opacity .15s, transform .15s;
+    }
+    .nav-dropdown.hidden {
+      opacity: 0; pointer-events: none;
+      transform: scale(.95) translateY(-4px);
+    }
+    .nav-dropdown:not(.hidden) {
+      opacity: 1; transform: scale(1) translateY(0);
+    }
+    .nav-dropdown .nav { padding: 8px; gap: 2px; }
+    .nav-dropdown .navBtn { font-size: 14px; padding: 10px 12px; }
+
+    /* Install button in dropdown */
+    .install-btn {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+      border: 1px solid rgba(59,158,255,.3); background: rgba(59,158,255,.08);
+      cursor: pointer; font-size: 14px; color: #7ec8ff;
+      font-family: var(--sans); text-align: left;
+      transition: all .15s ease; margin: 4px 0 0;
+    }
+    .install-btn:hover { background: rgba(59,158,255,.15); }
+    .install-btn.hidden { display: none; }
 
     /* ── Layout ── */
-    .layout { display: grid; grid-template-columns: 240px 1fr; gap: 14px; align-items: start; }
-    @media(max-width: 860px){ .layout { grid-template-columns: 1fr; } }
+    .layout { padding: 16px; }
+    @media(min-width: 860px) {
+      .layout { display: grid; grid-template-columns: 240px 1fr; gap: 14px; align-items: start; padding: 20px 20px 0; }
+      .top-nav .hamburger { display: none; }
+      .nav-dropdown { display: block !important; opacity: 1 !important; pointer-events: auto !important;
+        transform: none !important; position: static; width: auto; box-shadow: none;
+        background: transparent; border: none; border-radius: 0; }
+      .nav-dropdown .nav { padding: 10px; }
+      .sidebar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; position: sticky; top: 64px; }
+      .sidebar-hd { display: block; }
+      .install-btn { margin: 4px 10px 10px; width: calc(100% - 20px); }
+    }
+    @media(max-width: 859px) {
+      .sidebar-hd { display: none; }
+      .sidebar { display: none; }
+    }
 
     /* ── Sidebar ── */
     .sidebar {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius); overflow: hidden;
-      position: sticky; top: 20px;
     }
     .sidebar-hd {
       padding: 14px 16px 10px;
@@ -440,22 +501,72 @@
 </head>
 <body>
 <div class="wrap">
-  <header>
+  <!-- ── Top Navbar ── -->
+  <nav class="top-nav">
     <div class="brand">
-      <div class="brand-icon">EN</div>
+      <div class="brand-icon">
+        <img src="/english/icons/icon-192.png" alt="AI英文測驗">
+      </div>
       <div class="brand-text">
-        <div class="brand-title">AI 英文練習站</div>
-        <div class="brand-sub">國中英文 · 七上—八下</div>
+        <div class="brand-title">AI國中英文測驗</div>
+        <div class="brand-sub">七上 — 八下</div>
       </div>
     </div>
-    <div class="status-badge" id="apiBadge">
-      <span class="status-dot" id="statusDot"></span>
-      <span id="statusText">AI：尚未連線</span>
+    <div class="nav-right">
+      <div class="status-badge" id="apiBadge">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">AI：尚未連線</span>
+      </div>
+      <button class="hamburger" id="hamburgerBtn" aria-label="選單">
+        <div class="hb-line"></div>
+        <div class="hb-line"></div>
+        <div class="hb-line"></div>
+      </button>
     </div>
-  </header>
+  </nav>
+
+  <!-- ── Dropdown Menu (mobile) ── -->
+  <div class="nav-dropdown hidden" id="navDropdown">
+    <nav class="nav">
+      <button class="navBtn active" data-view="aiquiz">
+        <span class="nav-icon">⚡</span>
+        <span class="nav-label">AI 測驗</span>
+        <span class="nav-tag">Quiz</span>
+      </button>
+      <button class="navBtn" data-view="reading">
+        <span class="nav-icon">📖</span>
+        <span class="nav-label">課文練習</span>
+        <span class="nav-tag">Text</span>
+      </button>
+      <button class="navBtn" data-view="vocab">
+        <span class="nav-icon">📚</span>
+        <span class="nav-label">單字庫</span>
+        <span class="nav-tag">Vocab</span>
+      </button>
+      <button class="navBtn" data-view="grammar">
+        <span class="nav-icon">🔤</span>
+        <span class="nav-label">文法庫</span>
+        <span class="nav-tag">Grammar</span>
+      </button>
+      <button class="navBtn" data-view="stats">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">測驗統計</span>
+        <span class="nav-tag">Stats</span>
+      </button>
+      <button class="navBtn" data-view="settings">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">設定</span>
+        <span class="nav-tag">Config</span>
+      </button>
+      <button class="install-btn hidden" id="installBtn">
+        <span style="font-size:16px">📲</span>
+        <span>安裝到主畫面</span>
+      </button>
+    </nav>
+  </div>
 
   <div class="layout">
-    <!-- ── Sidebar ── -->
+    <!-- ── Sidebar (desktop only) ── -->
     <aside class="sidebar">
       <div class="sidebar-hd">功能選單</div>
       <nav class="nav">
@@ -490,6 +601,10 @@
           <span class="nav-tag">Config</span>
         </button>
       </nav>
+      <button class="install-btn hidden" id="installBtnDesktop">
+        <span style="font-size:16px">📲</span>
+        <span>安裝到主畫面</span>
+      </button>
     </aside>
 
     <!-- ── Main panel ── -->
@@ -817,6 +932,74 @@ document.addEventListener("DOMContentLoaded", function(){
   // as a fallback (we patched badge() in script.js to prefer .status-dot).
 });
 </script>
+<!-- ── Hamburger + Install JS ── -->
+<script>
+(function(){
+  // Hamburger toggle
+  const btn = document.getElementById('hamburgerBtn');
+  const dropdown = document.getElementById('navDropdown');
+  if (btn && dropdown) {
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      const open = !dropdown.classList.contains('hidden');
+      dropdown.classList.toggle('hidden', open);
+      btn.classList.toggle('open', !open);
+    });
+    document.addEventListener('click', function(){
+      dropdown.classList.add('hidden');
+      btn.classList.remove('open');
+    });
+    dropdown.addEventListener('click', function(e){ e.stopPropagation(); });
+  }
+
+  // Close dropdown when nav item clicked
+  document.querySelectorAll('#navDropdown .navBtn').forEach(function(b){
+    b.addEventListener('click', function(){
+      if (dropdown) dropdown.classList.add('hidden');
+      if (btn) btn.classList.remove('open');
+    });
+  });
+
+  // PWA Install prompt
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault();
+    deferredPrompt = e;
+    // Show install buttons
+    ['installBtn','installBtnDesktop'].forEach(function(id){
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('hidden');
+    });
+  });
+
+  function doInstall(){
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(function(result){
+      deferredPrompt = null;
+      if (result.outcome === 'accepted') {
+        ['installBtn','installBtnDesktop'].forEach(function(id){
+          const el = document.getElementById(id);
+          if (el) el.classList.add('hidden');
+        });
+      }
+    });
+  }
+
+  ['installBtn','installBtnDesktop'].forEach(function(id){
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', doInstall);
+  });
+
+  window.addEventListener('appinstalled', function(){
+    ['installBtn','installBtnDesktop'].forEach(function(id){
+      const el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
+    });
+  });
+})();
+</script>
+
 <!-- ── PWA Service Worker ── -->
 <script>
 if ('serviceWorker' in navigator) {
