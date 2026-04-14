@@ -72,7 +72,7 @@
     }
     .brand-sub { font-size: 10px; color: var(--muted); letter-spacing: .05em; }
 
-    .nav-right { display: flex; align-items: center; gap: 8px; }
+    .nav-right { display: flex; align-items: center; gap: 8px; position: relative; }
 
     .status-badge {
       display: inline-flex; align-items: center; gap: 6px;
@@ -104,13 +104,13 @@
     .hamburger.open .hb-line:nth-child(2) { opacity: 0; transform: scaleX(0); }
     .hamburger.open .hb-line:nth-child(3) { transform: translateY(-7px) rotate(-45deg); background: var(--fire2); }
 
-    /* Dropdown menu */
+    /* Dropdown menu — anchored to .nav-right */
     .nav-dropdown {
-      position: absolute; top: calc(100% + 4px); right: 16px;
+      position: absolute; top: calc(100% + 8px); right: 0;
       width: 220px; background: var(--surface);
       border: 1px solid var(--border2); border-radius: var(--radius);
-      box-shadow: 0 16px 40px rgba(0,0,0,.5);
-      overflow: hidden; z-index: 200;
+      box-shadow: 0 16px 40px rgba(0,0,0,.6);
+      overflow: hidden; z-index: 300;
       transform-origin: top right;
       transition: opacity .15s, transform .15s;
     }
@@ -131,10 +131,19 @@
       border: 1px solid rgba(59,158,255,.3); background: rgba(59,158,255,.08);
       cursor: pointer; font-size: 14px; color: #7ec8ff;
       font-family: var(--sans); text-align: left;
-      transition: all .15s ease; margin: 4px 0 0;
+      transition: all .15s ease; margin-top: 2px;
     }
     .install-btn:hover { background: rgba(59,158,255,.15); }
     .install-btn.hidden { display: none; }
+    .install-btn-manual {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: transparent;
+      cursor: pointer; font-size: 13px; color: var(--muted2);
+      font-family: var(--sans); text-align: left;
+      transition: all .15s ease; margin-top: 2px;
+    }
+    .install-btn-manual:hover { background: var(--surface2); color: var(--ink); }
 
     /* ── Layout ── */
     .layout { padding: 16px; }
@@ -505,7 +514,7 @@
   <nav class="top-nav">
     <div class="brand">
       <div class="brand-icon">
-        <img src="/english/icons/icon-192.png" alt="AI英文測驗">
+        <img src="icons/icon-192.png" alt="AI英文測驗" onerror="this.parentElement.innerHTML='EN';this.parentElement.style.cssText='display:flex;align-items:center;justify-content:center;font-family:monospace;font-weight:700;font-size:16px;color:#fff;background:linear-gradient(135deg,#f4622a,#ff8c5a);'">
       </div>
       <div class="brand-text">
         <div class="brand-title">AI國中英文測驗</div>
@@ -522,48 +531,52 @@
         <div class="hb-line"></div>
         <div class="hb-line"></div>
       </button>
-    </div>
-  </nav>
 
-  <!-- ── Dropdown Menu (mobile) ── -->
-  <div class="nav-dropdown hidden" id="navDropdown">
-    <nav class="nav">
-      <button class="navBtn active" data-view="aiquiz">
-        <span class="nav-icon">⚡</span>
-        <span class="nav-label">AI 測驗</span>
-        <span class="nav-tag">Quiz</span>
-      </button>
-      <button class="navBtn" data-view="reading">
-        <span class="nav-icon">📖</span>
-        <span class="nav-label">課文練習</span>
-        <span class="nav-tag">Text</span>
-      </button>
-      <button class="navBtn" data-view="vocab">
-        <span class="nav-icon">📚</span>
-        <span class="nav-label">單字庫</span>
-        <span class="nav-tag">Vocab</span>
-      </button>
-      <button class="navBtn" data-view="grammar">
-        <span class="nav-icon">🔤</span>
-        <span class="nav-label">文法庫</span>
-        <span class="nav-tag">Grammar</span>
-      </button>
-      <button class="navBtn" data-view="stats">
-        <span class="nav-icon">📊</span>
-        <span class="nav-label">測驗統計</span>
-        <span class="nav-tag">Stats</span>
-      </button>
-      <button class="navBtn" data-view="settings">
-        <span class="nav-icon">⚙️</span>
-        <span class="nav-label">設定</span>
-        <span class="nav-tag">Config</span>
-      </button>
-      <button class="install-btn hidden" id="installBtn">
-        <span style="font-size:16px">📲</span>
-        <span>安裝到主畫面</span>
-      </button>
-    </nav>
-  </div>
+      <!-- Dropdown anchored inside nav-right -->
+      <div class="nav-dropdown hidden" id="navDropdown">
+        <nav class="nav">
+          <button class="navBtn active" data-view="aiquiz">
+            <span class="nav-icon">⚡</span>
+            <span class="nav-label">AI 測驗</span>
+            <span class="nav-tag">Quiz</span>
+          </button>
+          <button class="navBtn" data-view="reading">
+            <span class="nav-icon">📖</span>
+            <span class="nav-label">課文練習</span>
+            <span class="nav-tag">Text</span>
+          </button>
+          <button class="navBtn" data-view="vocab">
+            <span class="nav-icon">📚</span>
+            <span class="nav-label">單字庫</span>
+            <span class="nav-tag">Vocab</span>
+          </button>
+          <button class="navBtn" data-view="grammar">
+            <span class="nav-icon">🔤</span>
+            <span class="nav-label">文法庫</span>
+            <span class="nav-tag">Grammar</span>
+          </button>
+          <button class="navBtn" data-view="stats">
+            <span class="nav-icon">📊</span>
+            <span class="nav-label">測驗統計</span>
+            <span class="nav-tag">Stats</span>
+          </button>
+          <button class="navBtn" data-view="settings">
+            <span class="nav-icon">⚙️</span>
+            <span class="nav-label">設定</span>
+            <span class="nav-tag">Config</span>
+          </button>
+          <div style="height:1px;background:var(--border);margin:4px 0"></div>
+          <button class="install-btn hidden" id="installBtn">
+            <span style="font-size:15px">📲</span>
+            <span>安裝到主畫面</span>
+          </button>
+          <button class="install-btn-manual" id="installManualBtn">
+            <span style="font-size:15px">ℹ️</span>
+            <span>如何安裝 App？</span>
+          </button>
+        </nav>
+      </div>
+    </div>
 
   <div class="layout">
     <!-- ── Sidebar (desktop only) ── -->
@@ -935,9 +948,10 @@ document.addEventListener("DOMContentLoaded", function(){
 <!-- ── Hamburger + Install JS ── -->
 <script>
 (function(){
-  // Hamburger toggle
   const btn = document.getElementById('hamburgerBtn');
   const dropdown = document.getElementById('navDropdown');
+
+  // Hamburger toggle
   if (btn && dropdown) {
     btn.addEventListener('click', function(e){
       e.stopPropagation();
@@ -960,43 +974,49 @@ document.addEventListener("DOMContentLoaded", function(){
     });
   });
 
-  // PWA Install prompt
+  // PWA Install prompt (Android Chrome)
   let deferredPrompt = null;
   window.addEventListener('beforeinstallprompt', function(e){
     e.preventDefault();
     deferredPrompt = e;
-    // Show install buttons
-    ['installBtn','installBtnDesktop'].forEach(function(id){
-      const el = document.getElementById(id);
-      if (el) el.classList.remove('hidden');
-    });
+    const el = document.getElementById('installBtn');
+    if (el) el.classList.remove('hidden');
   });
 
-  function doInstall(){
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then(function(result){
-      deferredPrompt = null;
-      if (result.outcome === 'accepted') {
-        ['installBtn','installBtnDesktop'].forEach(function(id){
-          const el = document.getElementById(id);
-          if (el) el.classList.add('hidden');
-        });
-      }
+  const installBtn = document.getElementById('installBtn');
+  if (installBtn) {
+    installBtn.addEventListener('click', function(){
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then(function(result){
+        deferredPrompt = null;
+        installBtn.classList.add('hidden');
+      });
     });
   }
 
-  ['installBtn','installBtnDesktop'].forEach(function(id){
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('click', doInstall);
+  window.addEventListener('appinstalled', function(){
+    const el = document.getElementById('installBtn');
+    if (el) el.classList.add('hidden');
   });
 
-  window.addEventListener('appinstalled', function(){
-    ['installBtn','installBtnDesktop'].forEach(function(id){
-      const el = document.getElementById(id);
-      if (el) el.classList.add('hidden');
+  // Manual install guide button
+  const manualBtn = document.getElementById('installManualBtn');
+  if (manualBtn) {
+    manualBtn.addEventListener('click', function(){
+      if (dropdown) dropdown.classList.add('hidden');
+      if (btn) btn.classList.remove('open');
+      // Show install guide in an alert (simple and reliable)
+      const ua = navigator.userAgent;
+      let msg = '';
+      if (/iPhone|iPad/.test(ua)) {
+        msg = '【iOS 安裝方式】\n1. 點下方的「分享」按鈕（方形加箭頭圖示）\n2. 選擇「加入主畫面」\n3. 點右上角「新增」完成！';
+      } else {
+        msg = '【Android 安裝方式】\n1. 點瀏覽器右上角「⋮」三個點\n2. 選擇「新增到主畫面」或「安裝應用程式」\n3. 確認安裝即完成！\n\n（若看到「📲 安裝到主畫面」按鈕出現，直接點那個更方便）';
+      }
+      alert(msg);
     });
-  });
+  }
 })();
 </script>
 
