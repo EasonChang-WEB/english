@@ -929,16 +929,42 @@ function templateTagOf(g) {
 
     let lastErr = "AI 請求失敗";
 
+    // 帶超時的 fetch（手機瀏覽器等待時間較短，加上 AbortController 避免無限等待）
+    async function fetchWithTimeout(url, options, timeoutMs = 55000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     try {
       for (const m of models) {
         const payload = { model: m, system, user };
 
         for (let attempt = 0; attempt <= 1; attempt++) { // 最多 retry 1 次
-          const r = await fetch(PROXY_AI, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
+          let r;
+          try {
+            r = await fetchWithTimeout(PROXY_AI, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+          } catch (fetchErr) {
+            // 網路錯誤或超時（手機常見）→ 伺服器可能剛被喚醒，重試一次
+            if (attempt === 0) {
+              lastErr = fetchErr.name === "AbortError" ? "連線超時" : (fetchErr.message || "網路錯誤");
+              badge(false, "AI：連線中，重試…");
+              await new Promise(res => setTimeout(res, 3000));
+              continue;
+            }
+            lastErr = fetchErr.name === "AbortError"
+              ? "AI 連線超時，請確認網路後再試"
+              : (fetchErr.message || "網路連線失敗");
+            break;
+          }
 
           const ct = (r.headers.get("content-type") || "").toLowerCase();
           if (!ct.includes("application/json")) {
